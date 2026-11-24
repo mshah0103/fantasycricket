@@ -1,0 +1,17 @@
+{
+  "name": "@fc/sportmonks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fc/scoring": "workspace:*",
+    "zod": "^3.25.0",
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}
