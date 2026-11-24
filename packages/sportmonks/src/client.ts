@@ -7,6 +7,8 @@ export class SportmonksError extends Error {
     message: string,
     public status: number,
     public endpoint: string,
+    /** Sanitised low-level error code (e.g. ECONNRESET); never an error message. */
+    public code?: string,
   ) {
     super(message);
     this.name = 'SportmonksError';
@@ -15,6 +17,14 @@ export class SportmonksError extends Error {
 
 export interface SportmonksClient {
   get(path: string, query?: Record<string, string>): Promise<{ body: unknown; entry: ArchiveEntry }>;
+}
+
+function errorCode(e: unknown): string | undefined {
+  const pick = (x: unknown) => {
+    const c = (x as { code?: unknown } | null)?.code;
+    return typeof c === 'string' && /^[A-Z0-9_]{1,40}$/.test(c) ? c : undefined;
+  };
+  return pick(e) ?? pick((e as { cause?: unknown } | null)?.cause);
 }
 
 const MAX_ATTEMPTS = 5;
@@ -44,33 +54,42 @@ export function createClient(opts: {
 
       for (let attempt = 1; ; attempt++) {
         await limiter.acquire(endpoint);
-        let res: Response;
+        let status: number;
+        let ok: boolean;
+        let body: unknown;
         try {
-          res = await fetchImpl(url.toString());
-        } catch {
-          // Network error text is not propagated: it could embed the request URL (and token).
+          const res = await fetchImpl(url.toString());
+          status = res.status;
+          ok = res.ok;
+          const text = await res.text();
+          try {
+            body = text ? JSON.parse(text) : null;
+          } catch {
+            body = { raw: text };
+          }
+        } catch (e) {
+          // Only the error code is kept: messages may embed the request URL (and token).
+          const code = errorCode(e);
           if (attempt >= MAX_ATTEMPTS) {
-            throw new SportmonksError(`Sportmonks request to ${endpoint} failed: network error`, 0, endpoint);
+            throw new SportmonksError(
+              `Sportmonks request to ${endpoint} failed: network error${code ? ` (${code})` : ''}`,
+              0,
+              endpoint,
+              code,
+            );
           }
           await sleep(BACKOFF_MS[attempt - 1]!);
           continue;
         }
-        const text = await res.text();
-        let body: unknown;
-        try {
-          body = text ? JSON.parse(text) : null;
-        } catch {
-          body = { raw: text };
-        }
-        const entry = await opts.archive.save(endpoint, { ...query }, res.status, body, now());
-        if (res.ok) return { body, entry };
+        const entry = await opts.archive.save(path, { ...query }, status, body, now());
+        if (ok) return { body, entry };
 
-        const retryable = res.status === 429 || res.status >= 500;
+        const retryable = status === 429 || status >= 500;
         if (retryable && attempt < MAX_ATTEMPTS) {
           await sleep(BACKOFF_MS[attempt - 1]!);
           continue;
         }
-        throw new SportmonksError(`Sportmonks ${endpoint} responded with status ${res.status}`, res.status, endpoint);
+        throw new SportmonksError(`Sportmonks ${endpoint} responded with HTTP ${status}`, status, endpoint);
       }
     },
   };

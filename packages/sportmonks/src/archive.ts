@@ -1,9 +1,10 @@
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { endpointSlug } from './endpoints.js';
+import { endpointPath, endpointSlug } from './endpoints.js';
 
 export interface ArchiveEntry {
+  /** Concrete request path, e.g. `/fixtures/123`. */
   endpoint: string;
   params: Record<string, string>;
   fetchedAt: string;
@@ -45,7 +46,7 @@ export function createFileArchive(rootDir: string): RawArchive {
       String(fetchedAt.getUTCFullYear()),
       pad(fetchedAt.getUTCMonth() + 1),
       pad(fetchedAt.getUTCDate()),
-      endpointSlug(endpoint),
+      endpointSlug(endpointPath(endpoint)),
     );
     const data = gzipSync(Buffer.from(JSON.stringify(body ?? null)));
     let file = '';

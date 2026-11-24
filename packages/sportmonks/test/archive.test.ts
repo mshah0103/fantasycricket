@@ -10,12 +10,14 @@ describe('file archive', () => {
     const root = await mkdtemp(join(tmpdir(), 'arch-'));
     const archive = createFileArchive(root);
     const at = new Date('2026-04-01T10:00:00.000Z');
-    const e1 = await archive.save('/fixtures/:id', { include: 'batting' }, 200, { a: 1 }, at);
-    const e2 = await archive.save('/fixtures/:id', {}, 404, { b: 2 }, at);
+    const e1 = await archive.save('/fixtures/123', { include: 'batting' }, 200, { a: 1 }, at);
+    const e2 = await archive.save('/fixtures/456', {}, 404, { b: 2 }, at);
 
     expect(await archive.readBody(e1)).toEqual({ a: 1 });
     expect(e1.file).toContain('sportmonks/2026/04/01/fixtures-id/');
     expect(e1.fetchedAt).toBe('2026-04-01T10:00:00.000Z');
+    expect(e1.endpoint).toBe('/fixtures/123');
+    expect(e2.endpoint).toBe('/fixtures/456');
     expect(e2.status).toBe(404);
     expect(e1.file).not.toBe(e2.file);
 
