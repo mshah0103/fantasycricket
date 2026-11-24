@@ -1,0 +1,19 @@
+import { createFileArchive } from '../archive.js';
+import { createClient } from '../client.js';
+import { loadConfig } from '../config.js';
+import { findIplLeagueId, listIplSeasons, listSeasonFixtures } from '../discover.js';
+import { requireYear } from './args.js';
+
+const year = requireYear(process.argv.slice(2), 'season');
+const { token, dataDir } = loadConfig();
+const client = createClient({ token, archive: createFileArchive(dataDir) });
+
+const leagueId = await findIplLeagueId(client);
+const season = (await listIplSeasons(client, leagueId)).find((s) => s.year === year);
+if (!season) throw new Error(`No IPL season found for ${year}`);
+const fixtures = await listSeasonFixtures(client, season.seasonId);
+console.log(['fixtureId', 'startingAt', 'localTeamId', 'visitorTeamId', 'round', 'status', 'superOver'].join('\t'));
+for (const f of fixtures) {
+  console.log([f.fixtureId, f.startingAt, f.localTeamId, f.visitorTeamId, f.round ?? '', f.status, f.superOver].join('\t'));
+}
+console.log(`${fixtures.length} fixtures (season ${season.seasonId})`);

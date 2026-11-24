@@ -6,6 +6,12 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "sm:list-fixtures": "tsx src/cli/list-fixtures.ts",
+    "sm:pull-history": "tsx src/cli/pull-history.ts",
+    "sm:pull-squads": "tsx src/cli/pull-squads.ts",
+    "sm:export-fixture": "tsx src/cli/export-fixture.ts"
+  },
   "dependencies": {
     "@fc/scoring": "workspace:*",
     "zod": "^3.25.0",
