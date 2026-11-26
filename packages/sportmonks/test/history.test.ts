@@ -56,7 +56,10 @@ describe('buildHistory', () => {
     expect(m44.length).toBeGreaterThan(11);
     for (const l of m44) expect(l.stats.superOver).toBeNull();
     const batters = m44.filter((l) => l.stats.regulation.batting);
-    expect(batters.some((l) => l.stats.teamId === l.meta.localTeamId || l.stats.teamId === l.meta.visitorTeamId)).toBe(true);
+    // PBKS (visitor, team 4) batted S1; KKR (local, team 5) has only the two openers from S2.
+    expect(m44[0]!.meta.visitorTeamId).toBe('4');
+    expect(batters.filter((l) => l.stats.teamId === '4')).toHaveLength(6);
+    expect(batters.filter((l) => l.stats.teamId === '5')).toHaveLength(2);
     const byTeam = new Map<string, number>();
     for (const l of batters) byTeam.set(l.stats.teamId, (byTeam.get(l.stats.teamId) ?? 0) + l.stats.regulation.batting!.runs);
     const totals = [...byTeam.values()].sort((a, b) => a - b);
@@ -92,6 +95,30 @@ describe('buildHistory', () => {
     const coverage = await buildHistory(archive, out, { fromYear: 2024, toYear: 2026 });
     expect(coverage.map((c) => c.year)).toEqual([2024, 2025, 2026]);
     expect(coverage[0]).toEqual({ year: 2024, seasonId: '', fixturesListed: 0, fixturesFetched: 0, withBatting: 0, withBallByBall: 0, superOverFixtures: 0, flagsByCode: {} });
+    expect(readdirSync(out).sort()).toEqual(['coverage.json', 'ipl-2025.jsonl']);
+  });
+
+  it('counts a whole-fixture failure as fixture_unparseable and reports it', async () => {
+    const archive = createFileArchive(tmp);
+    await seed(archive);
+    await archive.save('/fixtures/77777', {}, 200, { data: { id: 77777, league_id: 1, season_id: 1689, starting_at: '2025-04-01T14:00:00Z' } }, new Date(Date.UTC(2026, 0, 4)));
+    const errors: string[] = [];
+    const coverage = await buildHistory(archive, out, { onFixtureError: (id) => errors.push(id) });
+    expect(errors).toEqual(['77777']);
+    expect(coverage[0]!.flagsByCode.fixture_unparseable).toBe(1);
+    expect(coverage[0]!.fixturesFetched).toBe(4);
+    expect(coverage[0]!.withBallByBall).toBe(3);
+  });
+
+  it('reports a fixture with no resolvable year and writes nothing for it', async () => {
+    const archive = createFileArchive(tmp);
+    await seed(archive);
+    await archive.save('/fixtures/88888', {}, 200, { data: { id: 88888 } }, new Date(Date.UTC(2026, 0, 4)));
+    const errors: string[] = [];
+    const coverage = await buildHistory(archive, out, { onFixtureError: (id) => errors.push(id) });
+    expect(errors).toEqual(['88888']);
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]!.fixturesFetched).toBe(3);
     expect(readdirSync(out).sort()).toEqual(['coverage.json', 'ipl-2025.jsonl']);
   });
 });

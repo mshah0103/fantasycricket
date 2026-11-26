@@ -12,6 +12,11 @@ export interface ScoredPlayerMatch {
   score: ScoreResult;
 }
 
+/**
+ * `flagsByCode` is `Record<string, number>`, not keyed by `FlagCode`: besides the normalizer's flags it
+ * holds `fixture_unparseable`, the number of fixtures for which `normalizeFixture` threw. Per-record
+ * `unparseable_record` keeps its normalizer meaning.
+ */
 export interface SeasonCoverage {
   year: number;
   seasonId: string;
@@ -27,6 +32,8 @@ export interface BuildHistoryOptions {
   /** With both bounds (or either), every year in range appears in coverage.json, even with no data. */
   fromYear?: number;
   toYear?: number;
+  /** Called for a fixture that could not be processed (normalizer threw, or no season/year resolvable). */
+  onFixtureError?: (fixtureId: string, error: unknown) => void;
 }
 
 type Obj = Record<string, unknown>;
@@ -127,15 +134,19 @@ export async function buildHistory(
     const seasonId = str(rawObj.season_id);
     const startMs = Date.parse(str(rawObj.starting_at));
     const year = seasonYear.get(seasonId) ?? (Number.isNaN(startMs) ? undefined : new Date(startMs).getUTCFullYear());
-    if (year === undefined) continue; // not attributable to any season; cannot be listed
+    if (year === undefined) {
+      opts.onFixtureError?.(fixtureId, new Error('no season or year could be resolved for this fixture'));
+      continue;
+    }
 
     const c = cov(year, seasonId);
     c.fixturesFetched++;
     let n: NormalizedFixture;
     try {
       n = normalizeFixture(raw, catalog);
-    } catch {
-      c.flagsByCode.unparseable_record = (c.flagsByCode.unparseable_record ?? 0) + 1;
+    } catch (err) {
+      c.flagsByCode.fixture_unparseable = (c.flagsByCode.fixture_unparseable ?? 0) + 1;
+      opts.onFixtureError?.(fixtureId, err);
       continue;
     }
     if (n.players.some(hasBatting)) c.withBatting++;
