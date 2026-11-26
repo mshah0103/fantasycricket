@@ -24,7 +24,7 @@ Run-outs per season and who the source names. "Credited" is the share with a fie
 | 2026 | 41 | 18 | 23 | 0 | 43.9% |
 | all | 780 | 147 | 626 | 7 | 18.8% |
 
-Current rule: the credited fielder is `runout_by_id` (spec §5.6). A lone `catch_stump_player_id` is not credited and the run-out is flagged `runout_fielder_missing`. Which fielder to credit, and whether a lone `catch_stump_player_id` counts, is a pending commissioner decision (FIELD_MAP §5.2).
+Current rule (read from `runOutCreditedFielder`): with both ids the credited fielder is `runout_by_id`; a lone `catch_stump_player_id` is not credited; a lone `runout_by_id` is credited. A run-out with no credited fielder is flagged `runout_fielder_missing`. Which fielder to credit, and whether a lone `catch_stump_player_id` counts, is a pending commissioner decision (spec §5.6, FIELD_MAP §5.2).
 
 Sample of 10 two-fielder run-outs (of 147) for the manual ESPNcricinfo check. `catch_stump_player_id` is the first fielder, `runout_by_id` the second:
 
@@ -146,6 +146,32 @@ Cricsheet (one-time import for seasons Sportmonks lacks, spec §12.1; from `cove
 | 2012 | cs:2012 | 74 | 74 | 74 | 74 | 0 | runout_fielder_missing 85 |
 
 Source per season: Sportmonks 2013–2026; Cricsheet 2008–2012.
+
+### Cricsheet player linking
+
+From `cricsheet-links.json`. Cricsheet players are put on Sportmonks player ids by their Cricsheet registry id, from the 919 Cricsheet matches paired with their Sportmonks fixture (name rule, plus the same-team unique surname inside those matches): 613 Cricsheet players have a Sportmonks id. Everyone else keeps a `cs:` player id.
+
+| Season | Players | Linked | Unresolved |
+|---|---|---|---|
+| 2008 | 163 | 79 | 84 |
+| 2009 | 165 | 95 | 70 |
+| 2010 | 181 | 116 | 65 |
+| 2011 | 201 | 135 | 66 |
+| 2012 | 191 | 148 | 43 |
+
+Unresolved players who also play in a Cricsheet match of a season Sportmonks covers (played into the Sportmonks era but not linked): 7.
+
+| Cricsheet id | Name | Team | Seasons |
+|---|---|---|---|
+| cs:3edb58fc | AD Mascarenhas | Rajasthan Royals, Kings XI Punjab | 2008–2010, 2012 |
+| cs:8291f939 | AL Menaria | Rajasthan Royals | 2011–2012 |
+| cs:2af1b6d2 | AN Ahmed | Mumbai Indians | 2010–2012 |
+| cs:d18f9182 | DPMD Jayawardene | Kings XI Punjab, Kochi Tuskers Kerala, Delhi Daredevils | 2008–2012 |
+| cs:6eb146d2 | Gurkeerat Singh | Kings XI Punjab | 2012 |
+| cs:28c78fb3 | Harpreet Singh | Kolkata Knight Riders, Pune Warriors | 2010–2012 |
+| cs:2461eef2 | PA Reddy | Deccan Chargers | 2012 |
+
+Franchises renamed since 2008–2012 (e.g. Delhi Daredevils, Kings XI Punjab, Royal Challengers Bangalore) keep `cs:` team ids; Sportmonks only has current team names.
 
 ## Gate 7: latency and post-match corrections
 
