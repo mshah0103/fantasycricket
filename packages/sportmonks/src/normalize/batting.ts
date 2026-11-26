@@ -12,21 +12,16 @@ import {
   LineupEntrySchema,
   issueSummary,
   parseFixtureData,
+  readableId,
   type BattingRecord,
 } from '../schema.js';
 
-const emptyPhase = (): PhaseStats => ({
+/** A phase with no batting, no bowling and zero fielding. */
+export const emptyPhase = (): PhaseStats => ({
   batting: null,
   bowling: null,
   fielding: { catches: 0, stumpings: 0, runOuts: 0 },
 });
-
-/** `x[key]` as a string id when it is readable, for flagging a record that failed its schema. */
-function readableId(x: unknown, key: string): string | undefined {
-  if (!x || typeof x !== 'object' || Array.isArray(x)) return undefined;
-  const v = (x as Record<string, unknown>)[key];
-  return typeof v === 'number' || (typeof v === 'string' && v !== '') ? String(v) : undefined;
-}
 
 /**
  * Per-player batting and fielding for one fixture body (spec §5.1, §5.6; paths: FIELD_MAP §3–§5, §8).

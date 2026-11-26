@@ -7,6 +7,10 @@ import { z } from 'zod';
 const Id = z.number().int();
 const NullableId = Id.nullable();
 const Count = z.number().int().nonnegative();
+/** A collection key that may be absent (a washout has none, FIELD_MAP §1): missing key = empty array. */
+const Collection = z.array(z.unknown()).default([]);
+/** Innings code `S<n>`, n >= 1 (FIELD_MAP §2). */
+const Scoreboard = z.string().regex(/^S[1-9]\d*$/, 'expected scoreboard code S<n>');
 /** ISO 8601 with an explicit zone, so `new Date()` cannot fall back to local time. */
 const IsoInstant = z
   .string()
@@ -30,7 +34,7 @@ export const FixtureMetaSchema = z
     localteam_id: Id,
     visitorteam_id: Id,
     super_over: z.boolean().nullish(),
-    balls: z.array(z.unknown()),
+    balls: Collection,
   })
   .passthrough();
 
@@ -40,8 +44,8 @@ export const FixtureRosterSchema = z
     id: Id,
     localteam_id: Id,
     visitorteam_id: Id,
-    lineup: z.array(z.unknown()),
-    batting: z.array(z.unknown()),
+    lineup: Collection,
+    batting: Collection,
   })
   .passthrough();
 
@@ -56,7 +60,7 @@ export const BattingRecordSchema = z
   .object({
     player_id: Id,
     team_id: Id,
-    scoreboard: z.string().regex(/^S[1-9]\d*$/, 'expected scoreboard code S<n>'),
+    scoreboard: Scoreboard,
     score: Count,
     ball: Count,
     four_x: Count,
@@ -69,11 +73,77 @@ export const BattingRecordSchema = z
   .passthrough();
 export type BattingRecord = z.infer<typeof BattingRecordSchema>;
 
+/** `data` fields used for bowling: balls, the bowling card and the innings list (FIELD_MAP §2, §6, §7). */
+export const FixtureBowlingSchema = z
+  .object({
+    id: Id,
+    localteam_id: Id,
+    visitorteam_id: Id,
+    super_over: z.boolean().nullish(),
+    balls: Collection,
+    bowling: Collection,
+    runs: Collection,
+  })
+  .passthrough();
+
+/** `data.balls[].score`: the embedded `/scores` catalog object (FIELD_MAP §6.2). `noball` is a 0/1 flag. */
+const BallScoreSchema = z
+  .object({
+    id: Id,
+    name: z.string(),
+    runs: Count,
+    bye: Count,
+    leg_bye: Count,
+    noball: z.number().int().min(0).max(1),
+    ball: z.boolean(),
+    is_wicket: z.boolean(),
+  })
+  .passthrough();
+
+/** `data.balls[]` (FIELD_MAP §6.1). `team_id` is the batting team; `ball` is over index + legal ball / 10. */
+export const BallRecordSchema = z
+  .object({
+    team_id: Id,
+    scoreboard: Scoreboard,
+    ball: z.number().nonnegative(),
+    bowler_id: Id,
+    score: BallScoreSchema,
+  })
+  .passthrough();
+export type BallRecord = z.infer<typeof BallRecordSchema>;
+
+/** `data.bowling[]` (FIELD_MAP §7). `team_id` is the bowling team; `overs` is `overs.balls`; `wide` is wide RUNS. */
+export const BowlingRecordSchema = z
+  .object({
+    player_id: Id,
+    team_id: Id,
+    scoreboard: Scoreboard,
+    overs: z
+      .number()
+      .nonnegative()
+      .refine((o) => Math.round((o - Math.floor(o)) * 10) <= 5, 'expected overs.balls notation (balls 0-5)'),
+    runs: Count,
+    wickets: Count,
+    wide: Count,
+    noball: Count,
+  })
+  .passthrough();
+
+/** `data.runs[]`: one entry per innings; `inning` N is scoreboard `S<N>` (FIELD_MAP §2.1). */
+export const RunsEntrySchema = z.object({ inning: z.number().int().positive() }).passthrough();
+
 /** Parses a fixture body `{ data: {...} }` and returns `data`; throws if the envelope does not match. */
 export function parseFixtureData<T extends z.ZodTypeAny>(schema: T, raw: unknown): z.infer<T> {
   const parsed = z.object({ data: schema }).safeParse(raw);
   if (!parsed.success) throw new Error(`Unparseable Sportmonks fixture body: ${parsed.error.message}`);
   return parsed.data.data;
+}
+
+/** `x[key]` as a string id when it is readable, for flagging a record that failed its schema. */
+export function readableId(x: unknown, key: string): string | undefined {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return undefined;
+  const v = (x as Record<string, unknown>)[key];
+  return typeof v === 'number' || (typeof v === 'string' && v !== '') ? String(v) : undefined;
 }
 
 /** One-line summary of a failed record parse, for flag details. */
