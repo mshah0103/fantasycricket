@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import type { ArchiveEntry } from '../src/archive.js';
 import { SportmonksError, type SportmonksClient } from '../src/client.js';
@@ -203,5 +203,105 @@ describe('recordFixture', () => {
     expect(logs.filter((l) => l.startsWith('#- error:'))).toHaveLength(2);
     expect(logs[0]).toContain('503');
     expect(logs[0]).toContain('retrying in 30s');
+  });
+});
+
+describe('recordFixture: hard cap', () => {
+  const live = (script: () => unknown | Error, clock: () => number): SportmonksClient => ({
+    async get(path, query) {
+      const next = script();
+      if (next instanceof Error) throw next;
+      return { body: next, entry: { endpoint: path, params: query ?? {}, fetchedAt: new Date(clock()).toISOString(), status: 200, file: 'x' } as ArchiveEntry };
+    },
+  });
+
+  it('stops loudly when still polling 12 h after starting_at (stuck or unknown status)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rec-'));
+    let clock = at(12 * 60 - 1).getTime();
+    const sleeps: number[] = [];
+    const logs: string[] = [];
+    // An unknown status polls every 30 s forever; the cap ends it.
+    await recordFixture(live(() => snapshot('Weird Status', { lineup: 22 }), () => clock), '777', dir, {
+      now: () => new Date(clock),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+      log: (l) => logs.push(l),
+    });
+    expect(sleeps).toEqual([30_000, 30_000]); // polls at 11:59, 11:59:30, 12:00 -> stop
+    expect(logs.at(-1)).toMatch(/^STOPPED.*12 h after starting_at.*Weird Status/);
+    const lines = (await readFile(join(dir, 'timeline.jsonl'), 'utf8')).trim().split('\n');
+    expect(lines).toHaveLength(3);
+  });
+
+  it('the cap also ends a run of errors after a good poll', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rec-'));
+    let clock = at(12 * 60 - 0.5).getTime();
+    const script: (unknown | Error)[] = [snapshot('1st Innings', { lineup: 22 })];
+    const logs: string[] = [];
+    const sleeps: number[] = [];
+    await recordFixture(live(() => script.shift() ?? new SportmonksError('down', 503, '/fixtures/:id'), () => clock), '777', dir, {
+      now: () => new Date(clock),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+      log: (l) => logs.push(l),
+    });
+    expect(sleeps).toEqual([30_000]); // good poll at 11:59:30, error at 12:00 -> stop
+    expect(logs.at(-1)).toMatch(/^STOPPED.*12 h after starting_at/);
+  });
+
+  it('does not cut short the 2 h post-finish window', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rec-'));
+    let clock = at(12 * 60 - 10).getTime(); // finished 11:50 after the start
+    const sleeps: number[] = [];
+    const logs: string[] = [];
+    await recordFixture(live(() => snapshot('Finished', { lineup: 22 }), () => clock), '777', dir, {
+      now: () => new Date(clock),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+      log: (l) => logs.push(l),
+    });
+    expect(sleeps).toEqual(Array(13).fill(10 * MIN)); // as when finishing early: 13 polls 10 min apart, then stop
+    expect(logs.some((l) => l.startsWith('STOPPED'))).toBe(false);
+  });
+});
+
+describe('recordFixture: resume after a crash mid-append', () => {
+  const finishedClient = (clock: number): SportmonksClient => ({
+    async get(path, query) {
+      return {
+        body: snapshot('Finished', { lineup: 22 }),
+        entry: { endpoint: path, params: query ?? {}, fetchedAt: new Date(clock).toISOString(), status: 200, file: 'x' } as ArchiveEntry,
+      };
+    },
+  });
+
+  it('skips a final line that does not parse, repairs the timeline, and resumes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rec-'));
+    const clock = at(400).getTime();
+    const good = { seq: 7, fetchedAt: at(200).toISOString(), status: 'Finished', lineupPresent: true, ballsCount: 240 };
+    await writeFile(join(dir, '7.json.gz'), gzipSync(Buffer.from(JSON.stringify(snapshot('Finished')))));
+    await writeFile(join(dir, 'timeline.jsonl'), JSON.stringify(good) + '\n' + '{"seq":8,"fetchedAt":"2026-12-20T1');
+    const logs: string[] = [];
+    await recordFixture(finishedClient(clock), '777', dir, { now: () => new Date(clock), sleep: async () => {}, log: (l) => logs.push(l) });
+    const lines = (await readFile(join(dir, 'timeline.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.seq)).toEqual([7, 8]);
+    expect(logs[0]).toMatch(/unparseable last line/);
+    const seqs: number[] = [];
+    for await (const r of readRecording(dir)) seqs.push(r.seq);
+    expect(seqs).toEqual([7, 8]);
+  });
+
+  it('still throws on a bad line that is not the last', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rec-'));
+    const good = JSON.stringify({ seq: 1, fetchedAt: at(200).toISOString(), status: 'Finished', lineupPresent: true, ballsCount: 1 });
+    await writeFile(join(dir, 'timeline.jsonl'), `${good}\nnot json\n${good.replace('"seq":1', '"seq":2')}\n`);
+    await expect(recordFixture(finishedClient(at(400).getTime()), '777', dir, { now: () => at(400), sleep: async () => {} })).rejects.toThrow(/timeline\.jsonl line 2/);
+    await expect((async () => { for await (const _ of readRecording(dir)) void _; })()).rejects.toThrow(/line 2/);
   });
 });

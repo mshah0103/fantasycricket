@@ -74,7 +74,9 @@ describe('replayScores', () => {
     expect(results.map((r) => r.seq)).toEqual([1, 2, 3, 4]);
     expect(results[0]!.scores.size).toBe(0);
     expect(results[1]!.scores.size).toBe(0);
-    for (const s of results[2]!.scores.values()) expect(s.totalHalfPoints).toBeLessThanOrEqual(8); // lineup-only: at most appearance points
+    // Lineup only: every player has a record and scores exactly 0 (spec §5.7: no appearance points).
+    expect(results[2]!.scores.size).toBeGreaterThan(0);
+    for (const s of results[2]!.scores.values()) expect(s.totalHalfPoints).toBe(0);
     expect(results[3]!.scores.get('31')!.totalHalfPoints).toBe(185);
   });
 });

@@ -7,6 +7,8 @@ import { isKnownStatus, statusGroup } from './fieldMap.js';
 
 const MIN = 60_000;
 const ERROR_RETRY_MS = 30_000;
+/** Hard cap: a recorder still polling this long after `starting_at` stops (stuck or unknown statuses). */
+const HARD_CAP_MS = 12 * 60 * MIN;
 
 /**
  * Delay until the next poll (spec §11), or null to stop.
@@ -47,26 +49,43 @@ interface TimelineLine {
   error?: string;
 }
 
-async function readTimeline(dir: string): Promise<TimelineLine[]> {
+/**
+ * The timeline's lines. A last line that does not parse (a crash mid-append) is skipped and reported as
+ * `badTail`; a bad line anywhere else throws. `text` is the file as read ('' when absent).
+ */
+async function loadTimeline(dir: string): Promise<{ lines: TimelineLine[]; badTail: boolean; text: string }> {
+  const path = join(dir, 'timeline.jsonl');
   let text: string;
   try {
-    text = await readFile(join(dir, 'timeline.jsonl'), 'utf8');
+    text = await readFile(path, 'utf8');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { lines: [], badTail: false, text: '' };
     throw e;
   }
-  return text
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as TimelineLine);
+  const raw = text.split('\n').map((l, i) => ({ l, n: i + 1 })).filter(({ l }) => l.trim());
+  const lines: TimelineLine[] = [];
+  for (const [i, { l, n }] of raw.entries()) {
+    try {
+      lines.push(JSON.parse(l) as TimelineLine);
+    } catch {
+      if (i === raw.length - 1) return { lines, badTail: true, text };
+      throw new Error(`${path} line ${n} is not valid JSON; only a bad last line (a crash mid-append) is skipped`);
+    }
+  }
+  return { lines, badTail: false, text };
+}
+
+async function readTimeline(dir: string): Promise<TimelineLine[]> {
+  return (await loadTimeline(dir)).lines;
 }
 
 /**
  * Polls one fixture on the spec §11 schedule until the schedule says stop. Each snapshot is archived by
  * the client and written to `dir/<seq>.json.gz`, with a line in `dir/timeline.jsonl`. Restart-safe:
- * seq numbering and the 2 h post-finish window are recovered from an existing timeline. A
- * `SportmonksError` (after the client's own retries) is logged to the timeline and retried after 30 s;
- * any other error propagates.
+ * seq numbering and the 2 h post-finish window are recovered from an existing timeline, and a timeline whose
+ * last line was cut off by a crash is repaired (that line dropped). A `SportmonksError` (after the client's own
+ * retries) is logged to the timeline and retried after 30 s; any other error propagates. Hard cap: still
+ * polling 12 h after `starting_at` (a stuck or unknown status), it logs a STOPPED line and returns.
  */
 export async function recordFixture(
   client: SportmonksClient,
@@ -79,11 +98,29 @@ export async function recordFixture(
   const log = opts.log ?? (() => {});
   await mkdir(dir, { recursive: true });
 
-  const prior = await readTimeline(dir);
+  const timelinePath = join(dir, 'timeline.jsonl');
+  const { lines: prior, badTail, text } = await loadTimeline(dir);
+  if (badTail || (text !== '' && !text.endsWith('\n'))) {
+    // Rewrite without the cut-off line, so that the next append starts on a line of its own.
+    await writeFile(timelinePath, prior.map((l) => JSON.stringify(l) + '\n').join(''));
+    if (badTail) log('#- dropped an unparseable last line from timeline.jsonl (crash mid-append?)');
+  }
   let seq = prior.reduce((m, l) => (l.seq !== null && l.seq > m ? l.seq : m), 0);
   const firstFinished = prior.find((l) => l.seq !== null && l.status !== undefined && statusGroup(l.status) === 'finished');
   let finishedAt: Date | null = firstFinished ? new Date(firstFinished.fetchedAt) : null;
-  const timelinePath = join(dir, 'timeline.jsonl');
+  /** Last `starting_at` seen in a snapshot, for the hard cap. */
+  let knownStart: Date | null = null;
+  const pastCap = (status: string): boolean => {
+    const t = now().getTime();
+    if (knownStart === null || t - knownStart.getTime() < HARD_CAP_MS) return false;
+    if (finishedAt !== null && t - finishedAt.getTime() <= 120 * MIN) return false; // the post-finish window is bounded
+    log(
+      `STOPPED: still polling 12 h after starting_at ${knownStart.toISOString()} (last status "${status || '(none)'}"); ` +
+        'fixture stuck or status unknown. Check it, then re-run sm:record if needed.',
+    );
+    return true;
+  };
+  let lastStatus = '';
 
   for (;;) {
     let result: Awaited<ReturnType<SportmonksClient['get']>>;
@@ -96,6 +133,7 @@ export async function recordFixture(
       if (e.status >= 400 && e.status < 500 && e.status !== 429) {
         throw new Error(`Recording fixture ${fixtureId} stopped: Sportmonks responded with HTTP ${e.status} (not retryable)`);
       }
+      if (pastCap(lastStatus)) return;
       log(`#- error: ${e.message}; retrying in ${ERROR_RETRY_MS / 1000}s`);
       await sleep(ERROR_RETRY_MS);
       continue;
@@ -118,10 +156,12 @@ export async function recordFixture(
 
     if (finishedAt === null && statusGroup(status) === 'finished') finishedAt = new Date(entry.fetchedAt);
     const parsedStart = new Date(typeof data.starting_at === 'string' ? data.starting_at : NaN);
+    if (!Number.isNaN(parsedStart.getTime())) knownStart = parsedStart;
+    lastStatus = status;
     const startingAt = Number.isNaN(parsedStart.getTime()) ? now() : parsedStart;
     const delay = nextPollDelayMs(now(), startingAt, status, finishedAt);
     log(`#${seq} status=${status || '(none)'} lineup=${line.lineupPresent} balls=${line.ballsCount} next=${delay === null ? 'stop' : `${delay}ms`}`);
-    if (delay === null) return;
+    if (delay === null || pastCap(status)) return;
     await sleep(delay);
   }
 }
