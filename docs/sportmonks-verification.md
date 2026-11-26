@@ -135,6 +135,18 @@ Pending: no recordings yet (Big Bash trial). Record with `sm:record --fixture <i
 
 Seasons with no fixtures or with fixtures lacking ball-by-ball: 2008, 2009, 2010, 2011, 2012, 2015, 2017, 2024, 2025.
 
+Cricsheet (one-time import for seasons Sportmonks lacks, spec §12.1; from `coverage-cricsheet.json`. Listed and Fetched both count the Cricsheet match files dated in that year):
+
+| Season | Season id | Listed | Fetched | With batting | With ball-by-ball | Super Over fixtures | Flags |
+|---|---|---|---|---|---|---|---|
+| 2008 | cs:2008 | 58 | 58 | 58 | 58 | 0 | runout_fielder_missing 85 |
+| 2009 | cs:2009 | 57 | 57 | 57 | 57 | 1 | runout_fielder_missing 76 |
+| 2010 | cs:2010 | 60 | 60 | 60 | 60 | 1 | runout_fielder_missing 93 |
+| 2011 | cs:2011 | 73 | 73 | 73 | 73 | 0 | runout_fielder_missing 74 |
+| 2012 | cs:2012 | 74 | 74 | 74 | 74 | 0 | runout_fielder_missing 85 |
+
+Source per season: Sportmonks 2013–2026; Cricsheet 2008–2012.
+
 ## Gate 7: latency and post-match corrections
 
 Pending: no recordings yet (Big Bash trial). Record with `sm:record --fixture <id>`.
