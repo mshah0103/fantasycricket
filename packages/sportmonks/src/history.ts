@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { scorePlayerMatch, type PlayerMatchStats, type ScoreResult } from '@fc/scoring';
+import { scorePlayerMatch, type DataFlag, type PlayerMatchStats, type ScoreResult } from '@fc/scoring';
 import type { ArchiveEntry, RawArchive } from './archive.js';
 import { buildScoreCatalog } from './fieldMap.js';
 import { normalizeFixture, type NormalizedFixture } from './normalize/index.js';
@@ -10,6 +10,16 @@ export interface ScoredPlayerMatch {
   meta: FixtureMeta;
   stats: PlayerMatchStats;
   score: ScoreResult;
+}
+
+/**
+ * One line of `ipl-<year>-fixtures.jsonl`: a fixture and every flag the normalizer raised for it, fixture-level
+ * (no `playerId`, e.g. a Super Over without ball detail) and player-level alike. `ScoredPlayerMatch` carries only
+ * the flags on a player's own record; this is the complete record. Same fixture order as `ipl-<year>.jsonl`.
+ */
+export interface HistoryFixtureRecord {
+  meta: FixtureMeta;
+  flags: DataFlag[];
 }
 
 /**
@@ -26,6 +36,25 @@ export interface SeasonCoverage {
   withBallByBall: number;
   superOverFixtures: number;
   flagsByCode: Record<string, number>;
+}
+
+/**
+ * `cricsheet-links.json`, written by the Cricsheet import (`cs:import`) and shown in the verification report
+ * (gate 6): how Cricsheet players of the imported seasons were put on Sportmonks player ids.
+ */
+export interface CricsheetLinks {
+  /** Cricsheet matches paired with their Sportmonks fixture (the identity evidence). */
+  twinsUsed: number;
+  /** Cricsheet players (registry ids) with a Sportmonks player id. */
+  identitiesLinked: number;
+  /** Per imported season; player counts are distinct Cricsheet ids. */
+  perYear: { year: number; players: number; linked: number; unresolved: number }[];
+  /**
+   * Unresolved players of the imported seasons whose Cricsheet id also appears in a Cricsheet match of a season
+   * Sportmonks covers: they played into the Sportmonks era but were not linked. `team` lists their teams in the
+   * imported seasons; `years` the imported seasons they are unresolved in.
+   */
+  crossEraUnresolved: { csId: string; name: string; team: string; years: number[] }[];
 }
 
 export interface BuildHistoryOptions {
@@ -59,9 +88,9 @@ function emptyCoverage(year: number, seasonId = ''): SeasonCoverage {
 const hasBatting = (p: PlayerMatchStats) => p.regulation.batting !== null || p.superOver?.batting != null;
 
 /**
- * Scores every archived IPL fixture (latest 2xx body per fixture) and writes `ipl-<year>.jsonl` plus
- * `coverage.json` into `outDir`. Output is deterministic (no timestamps) and nothing else in `outDir`
- * is touched.
+ * Scores every archived IPL fixture (latest 2xx body per fixture) and writes `ipl-<year>.jsonl` (one
+ * `ScoredPlayerMatch` per player), `ipl-<year>-fixtures.jsonl` (one `HistoryFixtureRecord` per fixture) and
+ * `coverage.json` into `outDir`. Output is deterministic (no timestamps) and nothing else in `outDir` is touched.
  */
 export async function buildHistory(
   archive: RawArchive,
@@ -125,7 +154,7 @@ export async function buildHistory(
     cov(year, seasonId).fixturesListed += isObj(season) ? list(season.fixtures).length : 0;
   }
 
-  const byYear = new Map<number, { startingAt: string; fixtureId: number; rows: ScoredPlayerMatch[] }[]>();
+  const byYear = new Map<number, { startingAt: string; fixtureId: number; rows: ScoredPlayerMatch[]; fixture: HistoryFixtureRecord }[]>();
   for (const [fixtureId, e] of fixtures) {
     const raw = await archive.readBody(e);
     const d = unwrap(raw);
@@ -156,7 +185,7 @@ export async function buildHistory(
 
     const rows = n.players.map((stats) => ({ meta: n.meta, stats, score: scorePlayerMatch(stats) }));
     const bucket = byYear.get(year) ?? [];
-    bucket.push({ startingAt: n.meta.startingAt, fixtureId: Number(fixtureId), rows });
+    bucket.push({ startingAt: n.meta.startingAt, fixtureId: Number(fixtureId), rows, fixture: { meta: n.meta, flags: n.flags } });
     byYear.set(year, bucket);
   }
 
@@ -172,6 +201,7 @@ export async function buildHistory(
     bucket.sort((a, b) => (a.startingAt < b.startingAt ? -1 : a.startingAt > b.startingAt ? 1 : a.fixtureId - b.fixtureId));
     const lines = bucket.flatMap((b) => b.rows.map((r) => JSON.stringify(r) + '\n'));
     await writeFile(join(outDir, `ipl-${year}.jsonl`), lines.join(''));
+    await writeFile(join(outDir, `ipl-${year}-fixtures.jsonl`), bucket.map((b) => JSON.stringify(b.fixture) + '\n').join(''));
   }
 
   const result = [...coverage.values()].sort((a, b) => a.year - b.year);

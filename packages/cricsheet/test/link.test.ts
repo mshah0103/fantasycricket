@@ -72,6 +72,43 @@ describe('linkPlayers', () => {
   });
 });
 
+describe('linkPlayers: same-team surname fallback (twins only)', () => {
+  const opts = { teamNames, sameTeamSurname: true };
+
+  it('"KL Rahul" is "Lokesh Rahul": no name candidate, but the only Rahul on his team on both sides', () => {
+    const n = fixture(['KL Rahul', 'MR Marsh']);
+    const pool = [sm('47', 'Lokesh Rahul', '1979'), sm('31', 'Mitchell Marsh', '1979')];
+    // Off by default: the first initials differ, so he is unresolved.
+    expect(linkPlayers(n, pool, { teamNames }).unresolved).toEqual([csId(n, 'KL Rahul')]);
+    expect(linkPlayers(n, pool, opts)).toEqual({ linked: new Map([[csId(n, 'MR Marsh'), '31'], [csId(n, 'KL Rahul'), '47']]), unresolved: [] });
+    // A Rahul on the other team does not make the surname ambiguous on his.
+    expect(linkPlayers(n, [...pool, sm('9', 'Rahul Tewatia', '1976'), sm('10', 'Ravi Rahul', '1976')], opts).linked.get(csId(n, 'KL Rahul'))).toBe('47');
+  });
+
+  it('a duplicate surname on the team, on either side, never links by surname', () => {
+    // Sportmonks has two Pandyas on the team.
+    const one = fixture(['ZZ Pandya']);
+    expect(linkPlayers(one, [sm('1', 'Hardik Pandya', '1979'), sm('2', 'Krunal Pandya', '1979')], opts)).toEqual({ linked: new Map(), unresolved: [csId(one, 'ZZ Pandya')] });
+    // Cricsheet has two Pandyas on the team: neither links, though Sportmonks has one.
+    const two = fixture(['ZZ Pandya', 'YY Pandya']);
+    expect(linkPlayers(two, [sm('1', 'Hardik Pandya', '1979')], opts).linked.size).toBe(0);
+  });
+
+  it('needs the Sportmonks player on the same team, and team names', () => {
+    const n = fixture(['KL Rahul']);
+    expect(linkPlayers(n, [sm('47', 'Lokesh Rahul', '1976')], opts).linked.size).toBe(0); // on GT, not LSG
+    expect(linkPlayers(n, [sm('47', 'Lokesh Rahul', '1979')], { sameTeamSurname: true }).linked.size).toBe(0); // no team names
+  });
+
+  it('a surname link that claims an id another player links to is unresolved (both)', () => {
+    const n = fixture(['KL Rahul'], ['L Rahul']);
+    // "L Rahul" (GT) links to Lokesh Rahul by initial; "KL Rahul" (LSG) would take the same id by surname.
+    const r = linkPlayers(n, [sm('47', 'Lokesh Rahul', '1979'), sm('47', 'Lokesh Rahul', '1976')], opts);
+    expect(r.linked.size).toBe(0);
+    expect(names(n, r.unresolved).sort()).toEqual(['KL Rahul', 'L Rahul']);
+  });
+});
+
 describe('applyLinks', () => {
   it('replaces linked ids on records and flags, maps team ids by name, keeps cs: ids otherwise, re-sorts', () => {
     const body = structuredClone(m64);

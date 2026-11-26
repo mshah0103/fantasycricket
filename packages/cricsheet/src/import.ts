@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { scorePlayerMatch } from '@fc/scoring';
-import type { ArchiveEntry, RawArchive, ScoredPlayerMatch, SeasonCoverage } from '@fc/sportmonks';
+import type { ArchiveEntry, CricsheetLinks, HistoryFixtureRecord, RawArchive, ScoredPlayerMatch, SeasonCoverage } from '@fc/sportmonks';
 import { applyLinks, comparePlayerIds, linkPlayers, sportmonksLineupPlayers, type SportmonksPlayerRef } from './link.js';
 import { cricsheetMatchYear, normalizeCricsheetMatch, type CricsheetFixture } from './normalize.js';
 
@@ -40,6 +40,8 @@ export interface ImportResult {
   unresolved: UnresolvedPlayer[];
   summary: ImportYearSummary[];
   identities: IdentityEvidence;
+  /** What was written to `cricsheet-links.json`. */
+  links: CricsheetLinks;
 }
 
 /** One archived Sportmonks IPL fixture's lineup, with its UTC start date. */
@@ -127,8 +129,9 @@ const MIN_TWIN_LINKS = 11;
  * Identity evidence from twins (see `IdentityEvidence`). A Cricsheet match's twin is the Sportmonks fixture on
  * the same UTC date (Cricsheet's date is the local date; IPL starts are 10:00–14:30 UTC) whose lineup links the
  * most players with `linkPlayers` (that fixture's lineup only), with at least `MIN_TWIN_LINKS` links and
- * strictly more than any other fixture that day. A player's identity is kept only when all his twin links name
- * one Sportmonks id and no other Cricsheet id is linked to it.
+ * strictly more than any other fixture that day. Inside the twin the players are then linked again with the
+ * same-team surname fallback (`LinkOptions.sameTeamSurname`). A player's identity is kept only when all his twin
+ * links name one Sportmonks id and no other Cricsheet id is linked to it.
  */
 export function identitiesFromTwins(
   matches: readonly CricsheetFixture[],
@@ -151,7 +154,9 @@ export function identitiesFromTwins(
       continue;
     }
     twins++;
-    for (const [csId, smId] of best!.linked) seen.set(csId, (seen.get(csId) ?? new Set()).add(smId));
+    // The twin is chosen on the name rule alone; inside it, the same-team surname fallback also applies.
+    const links = linkPlayers(m, best!.f.players, { teamNames: sportmonks.teamNames, sameTeamSurname: true }).linked;
+    for (const [csId, smId] of links) seen.set(csId, (seen.get(csId) ?? new Set()).add(smId));
   }
   const claims = new Map<string, number>();
   for (const s of seen.values()) for (const smId of s) claims.set(smId, (claims.get(smId) ?? 0) + 1);
@@ -182,9 +187,10 @@ const hasBatting = (n: CricsheetFixture) => n.players.some((p) => p.regulation.b
  * One-time Cricsheet import for IPL seasons Sportmonks lacks (spec §12.1, Task 12). For each year: normalizes
  * every match whose first date falls in it, puts players on their Sportmonks ids where `identitiesFromTwins`
  * (over every Cricsheet match, any year) knows them, scores them with the same engine, and overwrites
- * `ipl-<year>.jsonl` (same lines and order as `buildHistory`). Also writes `coverage-cricsheet.json` and
- * `cricsheet-unresolved.json`, keeping rows for years not imported now. Refuses, before writing anything, a
- * year that has Sportmonks fixtures in `coverage.json`. Deterministic.
+ * `ipl-<year>.jsonl` and `ipl-<year>-fixtures.jsonl` (same lines and order as `buildHistory`). Also writes
+ * `coverage-cricsheet.json`, `cricsheet-unresolved.json` and `cricsheet-links.json` (`CricsheetLinks`), keeping
+ * rows for years not imported now. Refuses, before writing anything, a year that has Sportmonks fixtures in
+ * `coverage.json`. Deterministic.
  */
 export async function importCricsheet(opts: ImportOptions): Promise<ImportResult> {
   const years = [...new Set(opts.years)].sort((a, b) => a - b);
@@ -196,7 +202,8 @@ export async function importCricsheet(opts: ImportOptions): Promise<ImportResult
   if (!Array.isArray(smCoverage)) {
     throw new Error(`${smCoveragePath} not found or not a list: run sm:build-history first, so the import can check which years Sportmonks covers`);
   }
-  const clash = years.filter((y) => smCoverage.some((c) => c.year === y && c.fixturesFetched > 0));
+  const smYears = new Set(smCoverage.filter((c) => c.fixturesFetched > 0).map((c) => c.year));
+  const clash = years.filter((y) => smYears.has(y));
   if (clash.length > 0) {
     throw new Error(`Refusing to import ${clash.join(', ')}: Sportmonks has fixtures for ${clash.length === 1 ? 'that year' : 'those years'} in coverage.json`);
   }
@@ -205,6 +212,8 @@ export async function importCricsheet(opts: ImportOptions): Promise<ImportResult
   const coverage = new Map(years.map((y) => [y, emptyCoverage(y)]));
   const imported: { year: number; matchId: number; n: CricsheetFixture }[] = [];
   const all: CricsheetFixture[] = [];
+  /** Cricsheet ids that play in a match of a season Sportmonks covers. */
+  const inSportmonksEra = new Set<string>();
   const files = (await readdir(opts.cricsheetDir)).filter((f) => /^\d+\.json$/.test(f)).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
   for (const file of files) {
     const matchId = file.slice(0, -'.json'.length);
@@ -237,6 +246,7 @@ export async function importCricsheet(opts: ImportOptions): Promise<ImportResult
       continue; // a match of another year that fails only gives no evidence
     }
     all.push(n);
+    if (smYears.has(year)) for (const p of n.players) inSportmonksEra.add(p.playerId);
     if (!c) continue;
     if (hasBatting(n)) c.withBatting++;
     if (n.meta.hasBallByBall) c.withBallByBall++;
@@ -248,7 +258,9 @@ export async function importCricsheet(opts: ImportOptions): Promise<ImportResult
   // 2. Identities from twins; then each imported match on Sportmonks ids where known.
   const sportmonks = await loadSportmonksLineups(opts.archive);
   const identities = identitiesFromTwins(all, sportmonks);
-  const byYear = new Map<number, { startingAt: string; matchId: number; rows: ScoredPlayerMatch[] }[]>(years.map((y) => [y, []]));
+  const byYear = new Map<number, { startingAt: string; matchId: number; rows: ScoredPlayerMatch[]; fixture: HistoryFixtureRecord }[]>(
+    years.map((y) => [y, []]),
+  );
   const unresolvedRows = new Map<string, UnresolvedPlayer>();
   const people = new Map<number, Map<string, boolean>>(years.map((y) => [y, new Map()])); // year -> csId -> linked
   for (const { year, matchId, n } of imported) {
@@ -269,6 +281,7 @@ export async function importCricsheet(opts: ImportOptions): Promise<ImportResult
       startingAt: out.meta.startingAt,
       matchId,
       rows: out.players.map((stats) => ({ meta: out.meta, stats, score: scorePlayerMatch(stats) })),
+      fixture: { meta: out.meta, flags: out.flags },
     });
   }
 
@@ -278,6 +291,7 @@ export async function importCricsheet(opts: ImportOptions): Promise<ImportResult
     bucket.sort((a, b) => cmp(a.startingAt, b.startingAt) || a.matchId - b.matchId);
     const lines = bucket.flatMap((b) => b.rows.map((r) => JSON.stringify(r) + '\n'));
     await writeFile(join(opts.historyDir, `ipl-${year}.jsonl`), lines.join(''));
+    await writeFile(join(opts.historyDir, `ipl-${year}-fixtures.jsonl`), bucket.map((b) => JSON.stringify(b.fixture) + '\n').join(''));
   }
 
   for (const c of coverage.values()) c.flagsByCode = Object.fromEntries(Object.entries(c.flagsByCode).sort(([a], [b]) => cmp(a, b)));
@@ -298,5 +312,31 @@ export async function importCricsheet(opts: ImportOptions): Promise<ImportResult
     const linked = ps.filter(Boolean).length;
     return { year, matches: byYear.get(year)!.length, players: ps.length, linked, unresolved: ps.length - linked };
   });
-  return { coverage: [...coverage.values()], unresolved: allUnr.filter((u) => coverage.has(u.year)), summary, identities };
+
+  // Linking summary for the report. Per-year rows of years not imported now are kept, as above.
+  const linksPath = join(opts.historyDir, 'cricsheet-links.json');
+  const prevLinks = (await readJsonOrNull(linksPath)) as Partial<CricsheetLinks> | null;
+  const perYear = [
+    ...(Array.isArray(prevLinks?.perYear) ? prevLinks.perYear.filter((r) => !coverage.has(r.year)) : []),
+    ...summary.map(({ year, players, linked, unresolved }) => ({ year, players, linked, unresolved })),
+  ].sort((a, b) => a.year - b.year);
+  const crossEra = new Map<string, { csId: string; name: string; teams: string[]; years: number[] }>();
+  for (const u of allUnr) {
+    if (!inSportmonksEra.has(u.csId)) continue;
+    const row = crossEra.get(u.csId) ?? { csId: u.csId, name: u.name, teams: [], years: [] };
+    if (!row.teams.includes(u.team)) row.teams.push(u.team); // allUnr is sorted by year: teams in order of first season
+    if (!row.years.includes(u.year)) row.years.push(u.year);
+    crossEra.set(u.csId, row);
+  }
+  const links: CricsheetLinks = {
+    twinsUsed: identities.twins,
+    identitiesLinked: identities.identities.size,
+    perYear,
+    crossEraUnresolved: [...crossEra.values()]
+      .map(({ csId, name, teams, years: ys }) => ({ csId, name, team: teams.join(', '), years: ys.sort((a, b) => a - b) }))
+      .sort((a, b) => cmp(a.name, b.name) || cmp(a.csId, b.csId)),
+  };
+  await writeFile(linksPath, JSON.stringify(links, null, 2) + '\n');
+
+  return { coverage: [...coverage.values()], unresolved: allUnr.filter((u) => coverage.has(u.year)), summary, identities, links };
 }

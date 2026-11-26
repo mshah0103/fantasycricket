@@ -25,13 +25,16 @@ interface Diff {
 const components = (p: PlayerMatchStats): string =>
   scorePlayerMatch(p).components.map((c) => `${c.phase === 'super_over' ? 'SO ' : ''}${c.code}=${c.halfPoints}`).join(', ');
 
-/** Normalizes both sources, links Cricsheet players to the Sportmonks lineup and compares every linked total. */
+/**
+ * Normalizes both sources, links Cricsheet players to the Sportmonks lineup and compares every linked total. The
+ * Sportmonks fixture is the Cricsheet match's twin, so the same-team surname fallback applies, as in the import.
+ */
 function crossCheck(csFile: string, matchId: string, smFile: string) {
   const csFixture = normalizeCricsheetMatch(cs(csFile), { matchId });
   const smBody = sm(smFile);
   const smFixture = normalizeFixture(smBody, catalog);
   const { players, teamNames } = sportmonksLineupPlayers(smBody);
-  const { linked, unresolved } = linkPlayers(csFixture, players, { teamNames });
+  const { linked, unresolved } = linkPlayers(csFixture, players, { teamNames, sameTeamSurname: true });
   const applied = applyLinks(csFixture, linked, { teamNames });
   const smById = new Map(smFixture.players.map((p) => [p.playerId, p]));
   const diffs: Diff[] = [];
@@ -64,9 +67,11 @@ describe('cross-source: Cricsheet vs Sportmonks, same engine', () => {
 
   it('m29 (fielding sample): totals equal except Rickelton, whose two run-outs only Sportmonks credits', () => {
     const { csFixture, linked, unresolved, diffs } = crossCheck('1473466.json', '1473466', 'ipl2025-fielding-sample.json');
-    // KL Rahul is "Lokesh Rahul" in Sportmonks: the first initials differ, so he is left unresolved, never guessed.
-    expect(unresolved.map((id) => csFixture.playerNames[id])).toEqual(['KL Rahul']);
-    expect(linked.size).toBe(24);
+    // KL Rahul is "Lokesh Rahul" in Sportmonks: the first initials differ, but he is the only Rahul on Delhi
+    // Capitals on both sides, so the same-team surname fallback links him (47), and his total is equal.
+    expect(unresolved).toEqual([]);
+    expect(linked.size).toBe(25);
+    expect(linked.get(Object.entries(csFixture.playerNames).find(([, n]) => n === 'KL Rahul')![0])).toBe('47');
     // Task 12 ruling: Cricsheet's fielder order cannot say which fielder Sportmonks credits, so no Cricsheet
     // run-out is credited (runout_fielder_missing). Sportmonks credits runout_by_id: Rickelton (662) for
     // Ashutosh Sharma and Kuldeep Yadav, 2 x 8 points = 16 points = 32 half-points. Any other difference is a bug.

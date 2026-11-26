@@ -38,5 +38,8 @@ for (const s of result.summary) {
   console.log([s.year, s.matches, c.withBallByBall, c.superOverFixtures, s.players, s.linked, s.unresolved].join('\t'));
   if (Object.keys(c.flagsByCode).length) console.log(`  flags: ${JSON.stringify(c.flagsByCode)}`);
 }
+console.log(`unresolved players who also play in Sportmonks seasons: ${result.links.crossEraUnresolved.length}`);
 console.log(`failed matches: ${failed}`);
-console.log(`wrote ${historyDir} (ipl-<year>.jsonl, coverage-cricsheet.json, cricsheet-unresolved.json)`);
+console.log(
+  `wrote ${historyDir} (ipl-<year>.jsonl, ipl-<year>-fixtures.jsonl, coverage-cricsheet.json, cricsheet-unresolved.json, cricsheet-links.json)`,
+);

@@ -12,6 +12,14 @@ export interface SportmonksPlayerRef {
 export interface LinkOptions {
   /** Sportmonks team id -> team name, for the tie-break between several candidates and for team ids. */
   teamNames?: ReadonlyMap<string, string>;
+  /**
+   * Same-team surname fallback (final-review ruling). Only for a pool that is the lineup of this match's own
+   * Sportmonks fixture (its twin), and only with `teamNames`. A player with no name candidate is linked to the
+   * player of his team (Sportmonks team name equal to his Cricsheet team) whose surname is equal, when that
+   * surname is unique on that team on both sides: "KL Rahul" is "Lokesh Rahul". The usual guard still applies:
+   * two Cricsheet players on one Sportmonks id are both unresolved.
+   */
+  sameTeamSurname?: boolean;
 }
 
 export interface LinkResult {
@@ -116,7 +124,8 @@ const teamNameOf = (teamId: string): string => (teamId.startsWith('cs:') ? teamI
  * Links each Cricsheet player of one match to a Sportmonks player id (Task 12 notes).
  * Candidates: Sportmonks players whose name is `compatible` (surname + first initial, or full given names).
  * Exactly one candidate -> linked. Several -> those listed (in any entry) on a team whose name equals the
- * player's Cricsheet team in this match; exactly one left -> linked. Otherwise unresolved: never guesses.
+ * player's Cricsheet team in this match; exactly one left -> linked. None -> with `sameTeamSurname`, the
+ * same-team unique surname (see `LinkOptions`). Otherwise unresolved: never guesses.
  * Two Cricsheet players of the match on one Sportmonks id are both unresolved. A Sportmonks player may
  * appear several times in the pool (one entry per team); that is one candidate.
  */
@@ -126,16 +135,27 @@ export function linkPlayers(
   opts: LinkOptions = {},
 ): LinkResult {
   const index = indexPool(sportmonksPlayers);
+  const parsedById = new Map(cs.players.map((p) => [p.playerId, parseCricsheetName(cs.playerNames[p.playerId] ?? '')]));
+  /** Cricsheet players of this match per `<cs team id>|<surname>`, for the same-team surname fallback. */
+  const csSurnames = new Map<string, number>();
+  for (const p of cs.players) {
+    const parsed = parsedById.get(p.playerId);
+    if (parsed) csSurnames.set(`${p.teamId}|${parsed.surname}`, (csSurnames.get(`${p.teamId}|${parsed.surname}`) ?? 0) + 1);
+  }
   const proposed = new Map<string, string>();
   const unresolved: string[] = [];
   for (const p of cs.players) {
-    const parsed = parseCricsheetName(cs.playerNames[p.playerId] ?? '');
-    const entries = parsed ? (index.get(parsed.surname) ?? []).filter((e) => compatible(parsed, e.parsed)) : [];
+    const parsed = parsedById.get(p.playerId) ?? null;
+    const sameSurname = parsed ? (index.get(parsed.surname) ?? []) : [];
+    const entries = sameSurname.filter((e) => compatible(parsed!, e.parsed));
     let ids = [...new Set(entries.map((e) => e.id))];
+    const team = teamNameOf(p.teamId);
     if (ids.length > 1 && opts.teamNames) {
-      const team = teamNameOf(p.teamId);
       const onTeam = new Set(entries.filter((e) => opts.teamNames!.get(e.teamId) === team).map((e) => e.id));
       ids = ids.filter((id) => onTeam.has(id));
+    } else if (ids.length === 0 && opts.sameTeamSurname && opts.teamNames && parsed) {
+      const onTeam = new Set(sameSurname.filter((e) => opts.teamNames!.get(e.teamId) === team).map((e) => e.id));
+      if (onTeam.size === 1 && csSurnames.get(`${p.teamId}|${parsed.surname}`) === 1) ids = [...onTeam];
     }
     if (ids.length === 1) proposed.set(p.playerId, ids[0]!);
     else unresolved.push(p.playerId);

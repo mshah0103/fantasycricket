@@ -1,7 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ScoredPlayerMatch } from './history.js';
-import type { SeasonCoverage } from './history.js';
+import type { CricsheetLinks, ScoredPlayerMatch, SeasonCoverage } from './history.js';
 import type { ArchiveEntry, RawArchive } from './archive.js';
 import { buildScoreCatalog, dismissalKindFromScoreName, isSubstituteDismissal, runOutCreditedFielder, statusGroup, type ScoreCatalog } from './fieldMap.js';
 import { normalizeFixture } from './normalize/index.js';
@@ -226,14 +225,15 @@ function gate3(scan: Scan): string {
 // ---------------------------------------------------------------------------
 // Gates 4 and 6 (history)
 
-async function readCoverage(historyDir: string, file = 'coverage.json'): Promise<SeasonCoverage[] | null> {
+async function readJson<T>(historyDir: string, file: string): Promise<T | null> {
   try {
-    return JSON.parse(await readFile(join(historyDir, file), 'utf8')) as SeasonCoverage[];
+    return JSON.parse(await readFile(join(historyDir, file), 'utf8')) as T;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw e;
   }
 }
+const readCoverage = (historyDir: string, file = 'coverage.json') => readJson<SeasonCoverage[]>(historyDir, file);
 
 async function bowlerInnings(historyDir: string): Promise<Map<number, number>> {
   const out = new Map<number, number>();
@@ -310,7 +310,27 @@ async function gate6(historyDir: string): Promise<string> {
     ),
     '',
     `Source per season: Sportmonks ${yearRanges(smYears)}; Cricsheet ${yearRanges(csYears)}${neither.length ? `; neither ${yearRanges(neither)}` : ''}.`,
+    ...cricsheetLinking(await readJson<CricsheetLinks>(historyDir, 'cricsheet-links.json')),
   ].join('\n');
+}
+
+/** Gate 6 subsection from `cricsheet-links.json` (written by `cs:import`); nothing when the file is absent. */
+function cricsheetLinking(links: CricsheetLinks | null): string[] {
+  if (!links) return [];
+  const cross = links.crossEraUnresolved;
+  return [
+    '',
+    '### Cricsheet player linking',
+    '',
+    `From \`cricsheet-links.json\`. Cricsheet players are put on Sportmonks player ids by their Cricsheet registry id, from the ${links.twinsUsed} Cricsheet matches paired with their Sportmonks fixture (name rule, plus the same-team unique surname inside those matches): ${links.identitiesLinked} Cricsheet players have a Sportmonks id. Everyone else keeps a \`cs:\` player id.`,
+    '',
+    table(['Season', 'Players', 'Linked', 'Unresolved'], links.perYear.map((r) => [r.year, r.players, r.linked, r.unresolved])),
+    '',
+    `Unresolved players who also play in a Cricsheet match of a season Sportmonks covers (played into the Sportmonks era but not linked): ${cross.length}.`,
+    ...(cross.length ? ['', table(['Cricsheet id', 'Name', 'Team', 'Seasons'], cross.map((r) => [r.csId, r.name, r.team, yearRanges(r.years)]))] : []),
+    '',
+    'Franchises renamed since 2008–2012 (e.g. Delhi Daredevils, Kings XI Punjab, Royal Challengers Bangalore) keep `cs:` team ids; Sportmonks only has current team names.',
+  ];
 }
 
 /** `[2008, 2009, 2010, 2013]` -> `2008–2010, 2013`; empty -> `none`. */

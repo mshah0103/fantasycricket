@@ -6,7 +6,7 @@ import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFileArchive, type RawArchive } from '../src/archive.js';
 import { GATES_END_MARKER, buildGateReport, mergeGateReport } from '../src/gates.js';
-import { buildHistory } from '../src/history.js';
+import { buildHistory, type CricsheetLinks } from '../src/history.js';
 
 type Obj = Record<string, any>;
 const load = (name: string): Obj => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8')) as Obj;
@@ -89,6 +89,30 @@ describe('buildGateReport', () => {
     expect(g6).toContain('| 2008 | cs:2008 | 58 | 58 | 58 | 58 | 1 | runout_fielder_missing 40, sub_fielder_unidentified 1 |');
     expect(g6).toContain('| 2009 | cs:2009 |');
     expect(g6).toContain('Source per season: Sportmonks 2025; Cricsheet 2008–2009.');
+    expect(g6).not.toContain('Cricsheet player linking');
+
+    // With cricsheet-links.json: the linking summary, per-year table, cross-era table and the franchise note.
+    const links: CricsheetLinks = {
+      twinsUsed: 1000,
+      identitiesLinked: 600,
+      perYear: [
+        { year: 2008, players: 200, linked: 112, unresolved: 88 },
+        { year: 2009, players: 190, linked: 115, unresolved: 75 },
+      ],
+      crossEraUnresolved: [{ csId: 'cs:abc', name: 'KD Karthik', team: 'Delhi Daredevils, Mumbai Indians', years: [2008, 2009, 2011] }],
+    };
+    await writeFile(join(historyDir, 'cricsheet-links.json'), JSON.stringify(links));
+    const linked = md6(await buildGateReport({ historyDir, recordingsDir, archive }));
+    expect(linked).toContain('### Cricsheet player linking');
+    expect(linked).toContain('from the 1000 Cricsheet matches paired with their Sportmonks fixture');
+    expect(linked).toContain('600 Cricsheet players have a Sportmonks id');
+    expect(linked).toContain('| 2008 | 200 | 112 | 88 |');
+    expect(linked).toContain('| 2009 | 190 | 115 | 75 |');
+    expect(linked).toContain('not linked): 1.');
+    expect(linked).toContain('| cs:abc | KD Karthik | Delhi Daredevils, Mumbai Indians | 2008–2009, 2011 |');
+    expect(linked).toContain(
+      'Franchises renamed since 2008–2012 (e.g. Delhi Daredevils, Kings XI Punjab, Royal Challengers Bangalore) keep `cs:` team ids; Sportmonks only has current team names.',
+    );
   });
 
   it('renders Gates 5, 7 and 8 as Pending with no recordings and no squads', async () => {

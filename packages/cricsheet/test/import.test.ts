@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createFileArchive, type RawArchive, type ScoredPlayerMatch, type SeasonCoverage } from '@fc/sportmonks';
+import { createFileArchive, type CricsheetLinks, type HistoryFixtureRecord, type RawArchive, type ScoredPlayerMatch, type SeasonCoverage } from '@fc/sportmonks';
 import { identitiesFromTwins, importCricsheet } from '../src/import.js';
 import { sportmonksLineupPlayers } from '../src/link.js';
 import { normalizeCricsheetMatch } from '../src/normalize.js';
@@ -38,7 +38,8 @@ beforeEach(async () => {
 afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
 const read = (file: string) => readFileSync(join(historyDir, file), 'utf8');
-const outputs = ['ipl-2025.jsonl', 'coverage-cricsheet.json', 'cricsheet-unresolved.json'];
+const outputs = ['ipl-2025.jsonl', 'ipl-2025-fixtures.jsonl', 'coverage-cricsheet.json', 'cricsheet-unresolved.json', 'cricsheet-links.json'];
+const jsonl = <T>(file: string): T[] => read(file).trim().split('\n').map((l) => JSON.parse(l) as T);
 
 describe('identitiesFromTwins', () => {
   const m64 = () => normalizeCricsheetMatch(JSON.parse(readFileSync(here('./fixtures/1473502.json'), 'utf8')), { matchId: '1473502' });
@@ -103,9 +104,19 @@ describe('importCricsheet', () => {
       },
     ]);
     expect(result.coverage).toEqual(coverage);
-    const unresolved = JSON.parse(read('cricsheet-unresolved.json'));
-    expect(unresolved).toEqual([expect.objectContaining({ year: 2025, name: 'KL Rahul', team: 'Delhi Capitals', matches: 1 })]);
-    expect(unresolved[0].csId).toMatch(/^cs:/);
+    // KL Rahul ("Lokesh Rahul" in Sportmonks) links in his twin by the same-team surname fallback.
+    expect(JSON.parse(read('cricsheet-unresolved.json'))).toEqual([]);
+    expect(rows.find((r) => r.meta.fixtureId === 'cs:1473466' && r.stats.playerId === '47')).toBeDefined();
+    expect(rows.every((r) => !r.stats.playerId.startsWith('cs:'))).toBe(true);
+
+    // The fixtures file: one line per match, same order, every flag; counts equal the coverage flags.
+    const fixtures = jsonl<HistoryFixtureRecord>('ipl-2025-fixtures.jsonl');
+    expect(fixtures.map((f) => f.meta.fixtureId)).toEqual(['cs:1473466', 'cs:1473502']);
+    const counts: Record<string, number> = {};
+    for (const f of fixtures) for (const fl of f.flags) counts[fl.code] = (counts[fl.code] ?? 0) + 1;
+    expect(counts).toEqual(coverage[0]!.flagsByCode);
+    // Flags are on Sportmonks ids, like the player lines.
+    expect(fixtures.flatMap((f) => f.flags).every((fl) => fl.playerId === undefined || !fl.playerId.startsWith('cs:'))).toBe(true);
 
     const before = outputs.map(read);
     await importCricsheet({ cricsheetDir, historyDir, archive, years: [2025] });
@@ -117,7 +128,7 @@ describe('importCricsheet', () => {
     writeFileSync(join(historyDir, 'cricsheet-unresolved.json'), JSON.stringify([{ year: 2008, csId: 'cs:x', name: 'X', team: 'T', matches: 1 }]));
     await importCricsheet({ cricsheetDir, historyDir, archive, years: [2025] });
     expect((JSON.parse(read('coverage-cricsheet.json')) as SeasonCoverage[]).map((c) => c.year)).toEqual([2008, 2025]);
-    expect(JSON.parse(read('cricsheet-unresolved.json')).map((u: { year: number }) => u.year)).toEqual([2008, 2025]);
+    expect(JSON.parse(read('cricsheet-unresolved.json')).map((u: { year: number }) => u.year)).toEqual([2008]); // 2025: all linked
   });
 
   it('a season Sportmonks lacks takes ids only from Cricsheet registry ids seen in twins, never from a name alone', async () => {
@@ -133,7 +144,7 @@ describe('importCricsheet', () => {
 
     const result = await importCricsheet({ cricsheetDir, historyDir, archive, years: [2008] });
     expect(result.identities).toMatchObject({ twins: 2, ambiguous: [], unpaired: [] });
-    expect(result.identities.identities.size).toBe(25 + 24); // m64 all, m29 all but KL Rahul
+    expect(result.identities.identities.size).toBe(25 + 25); // m64 and m29 all (KL Rahul by surname in his twin)
     const rows = read('ipl-2008.jsonl').trim().split('\n').map((l) => JSON.parse(l) as ScoredPlayerMatch);
     expect(rows).toHaveLength(26);
     expect(rows.find((r) => r.stats.playerId === '31')!.score.totalHalfPoints).toBe(185); // Marsh, via his twin
@@ -143,6 +154,40 @@ describe('importCricsheet', () => {
     expect(result.summary).toEqual([{ year: 2008, matches: 1, players: 26, linked: 25, unresolved: 1 }]);
     // 2025 (Sportmonks' year) is evidence only: nothing is written for it.
     expect(existsSync(join(historyDir, 'ipl-2025.jsonl'))).toBe(false);
+  });
+
+  it('cricsheet-links.json: twins, per-year counts and unresolved players who also play in Sportmonks seasons', async () => {
+    // A 2008 copy of m29 with one extra DC player, also added to the 2025 m29 (where no Sportmonks player
+    // matches him), and one extra MI player who never plays from 2013 on.
+    const m29 = JSON.parse(readFileSync(here('./fixtures/1473466.json'), 'utf8'));
+    m29.info.players['Delhi Capitals'].push('QZ Crossera');
+    m29.info.registry.people['QZ Crossera'] = 'c0ffee00';
+    writeFileSync(join(cricsheetDir, '1473466.json'), JSON.stringify(m29));
+    const old = structuredClone(m29);
+    old.info.dates = ['2008-04-20'];
+    old.info.season = '2007/08';
+    old.info.players['Mumbai Indians'].push('QZ Oldtimer');
+    old.info.registry.people['QZ Oldtimer'] = 'oldf00d0';
+    writeFileSync(join(cricsheetDir, '2008001.json'), JSON.stringify(old));
+    writeFileSync(join(historyDir, 'coverage.json'), JSON.stringify([emptyCoverage(2008), { ...emptyCoverage(2025), fixturesFetched: 74 }]));
+    // A row of a year not imported now is kept.
+    writeFileSync(join(historyDir, 'cricsheet-links.json'), JSON.stringify({ perYear: [{ year: 2009, players: 1, linked: 0, unresolved: 1 }] }));
+
+    const result = await importCricsheet({ cricsheetDir, historyDir, archive, years: [2008] });
+    const links = JSON.parse(read('cricsheet-links.json')) as CricsheetLinks;
+    expect(links).toEqual({
+      twinsUsed: 2,
+      identitiesLinked: 25 + 25,
+      perYear: [
+        { year: 2008, players: 27, linked: 25, unresolved: 2 }, // m29 has 25 players (one a substitute fielder) + 2
+        { year: 2009, players: 1, linked: 0, unresolved: 1 },
+      ],
+      crossEraUnresolved: [{ csId: 'cs:c0ffee00', name: 'QZ Crossera', team: 'Delhi Capitals', years: [2008] }],
+    });
+    expect(result.links).toEqual(links);
+    const before = read('cricsheet-links.json');
+    await importCricsheet({ cricsheetDir, historyDir, archive, years: [2008] });
+    expect(read('cricsheet-links.json')).toBe(before);
   });
 
   it('refuses a year that has Sportmonks fixtures, before writing anything', async () => {
