@@ -1,0 +1,223 @@
+import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createFileArchive, type RawArchive } from '../src/archive.js';
+import { GATES_END_MARKER, buildGateReport, describeRunOutRule, mergeGateReport } from '../src/gates.js';
+import { buildHistory, type CricsheetLinks } from '../src/history.js';
+
+type Obj = Record<string, any>;
+const load = (name: string): Obj => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8')) as Obj;
+
+let tmp: string;
+let historyDir: string;
+let recordingsDir: string;
+let archive: RawArchive;
+beforeEach(async () => {
+  tmp = await mkdtemp(join(tmpdir(), 'gates-'));
+  historyDir = join(tmp, 'history');
+  recordingsDir = join(tmp, 'recordings');
+  archive = createFileArchive(tmp);
+  const t = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n));
+  await archive.save('/scores', {}, 200, load('scores.json'), t(0));
+  await archive.save('/fixtures/65607', {}, 200, load('ipl2025-m64-gt-lsg.json'), t(1));
+  await archive.save('/fixtures/65574', {}, 200, load('ipl2025-m32-dc-rr-superover.json'), t(2));
+  await archive.save('/fixtures/65586', {}, 200, load('ipl2025-m44-kkr-pbks-noresult.json'), t(3));
+  await buildHistory(archive, historyDir);
+});
+afterEach(() => rm(tmp, { recursive: true, force: true }));
+
+async function writeRecording(): Promise<void> {
+  const dir = join(recordingsDir, '65607');
+  await mkdir(dir, { recursive: true });
+  const full = load('ipl2025-m64-gt-lsg.json');
+  const lines: string[] = [];
+  const startMs = Date.parse(full.data.starting_at as string);
+  const snaps = [
+    { n: 1, at: startMs - 30 * 60_000, status: 'NS', balls: 0 },
+    { n: 2, at: startMs + 4 * 3600_000, status: 'Finished', balls: full.data.balls.length },
+  ];
+  for (const s of snaps) {
+    const body = structuredClone(full);
+    body.data.status = s.status;
+    body.data.balls = full.data.balls.slice(0, s.balls);
+    await writeFile(join(dir, `${s.n}.json.gz`), gzipSync(Buffer.from(JSON.stringify(body))));
+    lines.push(JSON.stringify({ seq: s.n, fetchedAt: new Date(s.at).toISOString(), status: s.status, lineupPresent: true, ballsCount: s.balls }));
+  }
+  await writeFile(join(dir, 'timeline.jsonl'), lines.join('\n') + '\n');
+}
+
+const md6 = (md: string): string => md.split(/^## Gate 6\b/m)[1]!.split(/^## Gate 7\b/m)[0]!;
+const md7 = (md: string): string => md.split(/^## Gate 7\b/m)[1]!.split(/^## Gate 8\b/m)[0]!;
+
+/** A recording of m64 with the given bodies (NS first, then each body as a Finished snapshot, 10 min apart). */
+async function writeFinishedRecording(bodies: Obj[]): Promise<void> {
+  const dir = join(recordingsDir, '65607');
+  await mkdir(dir, { recursive: true });
+  const startMs = Date.parse(load('ipl2025-m64-gt-lsg.json').data.starting_at as string);
+  const ns = load('ipl2025-m64-gt-lsg.json');
+  ns.data.status = 'NS';
+  ns.data.balls = [];
+  const lines: string[] = [];
+  for (const [i, body] of [ns, ...bodies].entries()) {
+    const seq = i + 1;
+    await writeFile(join(dir, `${seq}.json.gz`), gzipSync(Buffer.from(JSON.stringify(body))));
+    lines.push(JSON.stringify({ seq, fetchedAt: new Date(startMs + (4 * 60 + 10 * i) * 60_000).toISOString(), status: i === 0 ? 'NS' : 'Finished' }));
+  }
+  await writeFile(join(dir, 'timeline.jsonl'), lines.join('\n') + '\n');
+}
+
+describe('buildGateReport', () => {
+  it('has a section per gate and lists the Super Over fixture under Gate 3', async () => {
+    await writeRecording();
+    const md = await buildGateReport({ historyDir, recordingsDir, archive });
+    for (let g = 1; g <= 8; g++) expect(md).toMatch(new RegExp(`^## Gate ${g}\\b`, 'm'));
+    const gate3 = md.split(/^## Gate 3\b/m)[1]!.split(/^## Gate 4\b/m)[0]!;
+    expect(gate3).toContain('65574');
+    expect(gate3).toContain('S3');
+    expect(gate3).toContain('none detected');
+    expect(gate3).toContain('15267');
+    expect(gate3).toMatch(/not that the data is complete/);
+    expect(md.trimEnd().endsWith(GATES_END_MARKER)).toBe(true);
+    const gate5 = md.split(/^## Gate 5\b/m)[1]!.split(/^## Gate 6\b/m)[0]!;
+    expect(gate5).toContain('65607');
+    expect(gate5).toContain('-30');
+    expect(md.split(/^## Gate 7\b/m)[1]!.split(/^## Gate 8\b/m)[0]).toContain('65607');
+  });
+
+  it('is deterministic', async () => {
+    await writeRecording();
+    const a = await buildGateReport({ historyDir, recordingsDir, archive });
+    const b = await buildGateReport({ historyDir, recordingsDir, archive });
+    expect(a).toBe(b);
+  });
+
+  it('Gate 6 adds the Cricsheet coverage rows when present and says which source each season comes from', async () => {
+    const without = md6(await buildGateReport({ historyDir, recordingsDir, archive }));
+    expect(without).not.toContain('Cricsheet');
+    const cs = (year: number) => ({
+      year, seasonId: `cs:${year}`, fixturesListed: 58, fixturesFetched: 58, withBatting: 58, withBallByBall: 58, superOverFixtures: 1,
+      flagsByCode: { runout_fielder_missing: 40, sub_fielder_unidentified: 1 },
+    });
+    await writeFile(join(historyDir, 'coverage-cricsheet.json'), JSON.stringify([cs(2008), cs(2009)]));
+    const g6 = md6(await buildGateReport({ historyDir, recordingsDir, archive }));
+    expect(g6).toContain('Cricsheet');
+    expect(g6).toContain('| 2008 | cs:2008 | 58 | 58 | 58 | 58 | 1 | runout_fielder_missing 40, sub_fielder_unidentified 1 |');
+    expect(g6).toContain('| 2009 | cs:2009 |');
+    expect(g6).toContain('Source per season: Sportmonks 2025; Cricsheet 2008–2009.');
+    expect(g6).not.toContain('Cricsheet player linking');
+
+    // With cricsheet-links.json: the linking summary, per-year table, cross-era table and the franchise note.
+    const links: CricsheetLinks = {
+      twinsUsed: 1000,
+      identitiesLinked: 600,
+      perYear: [
+        { year: 2008, players: 200, linked: 112, unresolved: 88 },
+        { year: 2009, players: 190, linked: 115, unresolved: 75 },
+      ],
+      crossEraUnresolved: [{ csId: 'cs:abc', name: 'KD Karthik', team: 'Delhi Daredevils, Mumbai Indians', years: [2008, 2009, 2011] }],
+    };
+    await writeFile(join(historyDir, 'cricsheet-links.json'), JSON.stringify(links));
+    const linked = md6(await buildGateReport({ historyDir, recordingsDir, archive }));
+    expect(linked).toContain('### Cricsheet player linking');
+    expect(linked).toContain('from the 1000 Cricsheet matches paired with their Sportmonks fixture');
+    expect(linked).toContain('600 Cricsheet players have a Sportmonks id');
+    expect(linked).toContain('| 2008 | 200 | 112 | 88 |');
+    expect(linked).toContain('| 2009 | 190 | 115 | 75 |');
+    expect(linked).toContain('not linked): 1.');
+    expect(linked).toContain('| cs:abc | KD Karthik | Delhi Daredevils, Mumbai Indians | 2008–2009, 2011 |');
+    expect(linked).toContain(
+      'Franchises renamed since 2008–2012 (e.g. Delhi Daredevils, Kings XI Punjab, Royal Challengers Bangalore) keep `cs:` team ids; Sportmonks only has current team names.',
+    );
+  });
+
+  it('renders Gates 5, 7 and 8 as Pending with no recordings and no squads', async () => {
+    const md = await buildGateReport({ historyDir, recordingsDir, archive });
+    for (const g of [5, 7, 8]) {
+      const next = g + 1;
+      const section = md.split(new RegExp(`^## Gate ${g}\\b`, 'm'))[1]!.split(new RegExp(`^## Gate ${next}\\b|${GATES_END_MARKER}`, 'm'))[0]!;
+      expect(section).toContain('Pending');
+    }
+  });
+});
+
+describe('Gate 1 run-out rule text', () => {
+  it('is read from runOutCreditedFielder, not hard-coded', async () => {
+    const g1 = (await buildGateReport({ historyDir, recordingsDir, archive })).split(/^## Gate 1\b/m)[1]!.split(/^## Gate 2\b/m)[0]!;
+    expect(g1).toContain('(`runOutCreditedFielder`: `runout_by_id` only)');
+    expect(g1).toContain(
+      'Current rule (read from `runOutCreditedFielder`): with both ids the credited fielder is `runout_by_id`; a lone `catch_stump_player_id` is not credited; a lone `runout_by_id` is credited.',
+    );
+    // The commissioner's possible change (FIELD_MAP §5.2): fall back to catch_stump_player_id.
+    const fallback = describeRunOutRule((r) => (r.runout_by_id ?? r.catch_stump_player_id)?.toString() ?? null);
+    expect(fallback.short).toBe('`runout_by_id`, else `catch_stump_player_id`');
+    expect(fallback.sentence).toContain('a lone `catch_stump_player_id` is credited;');
+    expect(fallback.sentence).not.toContain('is not credited');
+  });
+});
+
+describe('Gate 7', () => {
+  it('a player missing from one snapshot is "absent", not 0', async () => {
+    const early = load('ipl2025-m64-gt-lsg.json');
+    early.data.lineup = (early.data.lineup as Obj[]).filter((p) => p.id !== 9921); // Anuj Rawat: lineup only, 0 points
+    await writeFinishedRecording([early, load('ipl2025-m64-gt-lsg.json')]);
+    const g7 = md7(await buildGateReport({ historyDir, recordingsDir, archive }));
+    expect(g7).toContain('1 player(s) changed');
+    expect(g7).toContain('player 9921: absent -> 0 half-points');
+    // Against the history pull, he is in both: no change.
+    expect(g7).toMatch(/vs the history pull at [^:]+:\d\d:[\d.]+Z: no score changes/);
+  });
+
+  it('a snapshot that does not normalize is reported in the section, not fatal', async () => {
+    const bad = { data: { id: 65607, status: 'Finished' } };
+    await writeFinishedRecording([bad, load('ipl2025-m64-gt-lsg.json')]);
+    const md = await buildGateReport({ historyDir, recordingsDir, archive });
+    const g7 = md7(md);
+    expect(g7).toMatch(/First finished snapshot #2 .* cannot compare: snapshot #2 does not normalize \(/);
+    expect(g7).toContain('no score changes'); // the last snapshot vs the history pull still compares
+    expect(md).toMatch(/^## Gate 8\b/m);
+  });
+});
+
+describe('Gate 8 squads', () => {
+  it('counts positions, lists players without one and shows the distribution', async () => {
+    const t = new Date(Date.UTC(2026, 11, 20));
+    await archive.save('/leagues', {}, 200, { data: [{ id: 1, name: 'Indian Premier League' }] }, t);
+    await archive.save('/seasons', { 'filter[league_id]': '1' }, 200, { data: [{ id: 1795, league_id: 1, name: '2026' }, { id: 2001, league_id: 1, name: '2027' }] }, t);
+    const player = (id: number, fullname: string, position: unknown) => ({ resource: 'players', id, fullname, firstname: 'x', lastname: 'y', position, squad: { season_id: 2001 } });
+    await archive.save('/teams/8/squad/2001', {}, 200, {
+      data: {
+        resource: 'teams', id: 8, name: 'Team', code: 'T',
+        squad: [player(11, 'Has Position', { resource: 'positions', id: 3, name: 'Wicketkeeper' }), player(12, 'No Position', null)],
+      },
+    }, t);
+    const md = await buildGateReport({ historyDir, recordingsDir, archive });
+    const g8 = md.split(/^## Gate 8\b/m)[1]!;
+    expect(g8).toContain('season 2001');
+    expect(g8).toContain('2 players. With a position: 1. Without: 1.');
+    expect(g8).toContain('| 12 | No Position | 8 |');
+    expect(g8).not.toContain('Has Position');
+    expect(g8).toContain('| 3 Wicketkeeper | 1 |');
+    expect(g8).not.toContain('Pending');
+  });
+});
+
+describe('mergeGateReport', () => {
+  const gen = `# T\n\n## Gate 1\nnew\n\n${GATES_END_MARKER}\n`;
+  it('keeps everything after the marker', () => {
+    const existing = `# T\n\n## Gate 1\nold\n\n${GATES_END_MARKER}\n\n## Manual checks\nhand written\n\n## Spec impact\nnone\n`;
+    const out = mergeGateReport(existing, gen);
+    expect(out).toContain('new');
+    expect(out).not.toContain('old');
+    expect(out.endsWith('\n\n## Manual checks\nhand written\n\n## Spec impact\nnone\n')).toBe(true);
+  });
+  it('creates empty manual sections when there is no file', () => {
+    const out = mergeGateReport(null, gen);
+    expect(out).toBe(`${gen}\n## Manual checks\n\n## Spec impact\n`);
+  });
+  it('treats an existing file without the marker as new and does not lose it silently', () => {
+    expect(() => mergeGateReport('hand written only', gen)).toThrow(/END GENERATED/);
+  });
+});

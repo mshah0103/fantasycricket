@@ -1,0 +1,26 @@
+{
+  "name": "@fc/sportmonks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "sm:list-fixtures": "tsx --env-file-if-exists=../../.env src/cli/list-fixtures.ts",
+    "sm:pull-history": "tsx --env-file-if-exists=../../.env src/cli/pull-history.ts",
+    "sm:pull-squads": "tsx --env-file-if-exists=../../.env src/cli/pull-squads.ts",
+    "sm:record": "tsx --env-file-if-exists=../../.env src/cli/record.ts",
+    "sm:build-history": "tsx --env-file-if-exists=../../.env src/cli/build-history.ts",
+    "sm:gates": "tsx --env-file-if-exists=../../.env src/cli/gates.ts",
+    "sm:export-fixture": "tsx --env-file-if-exists=../../.env src/cli/export-fixture.ts"
+  },
+  "dependencies": {
+    "@fc/scoring": "workspace:*",
+    "zod": "^3.25.0",
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

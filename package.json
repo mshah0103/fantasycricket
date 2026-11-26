@@ -1,0 +1,21 @@
+{
+  "name": "fantasycricket",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "sm:list-fixtures": "pnpm --filter @fc/sportmonks sm:list-fixtures",
+    "sm:pull-history": "pnpm --filter @fc/sportmonks sm:pull-history",
+    "sm:pull-squads": "pnpm --filter @fc/sportmonks sm:pull-squads",
+    "sm:export-fixture": "pnpm --filter @fc/sportmonks sm:export-fixture",
+    "sm:build-history": "pnpm --filter @fc/sportmonks sm:build-history",
+    "sm:record": "pnpm --filter @fc/sportmonks sm:record",
+    "sm:gates": "pnpm --filter @fc/sportmonks sm:gates",
+    "cs:import": "pnpm --filter @fc/cricsheet cs:import"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
