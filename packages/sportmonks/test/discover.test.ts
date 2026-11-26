@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findIplLeagueId, listIplSeasons, listSeasonFixtures } from '../src/discover.js';
+import { findIplLeagueId, findLeagueId, listIplSeasons, listSeasonFixtures } from '../src/discover.js';
 import type { SportmonksClient } from '../src/client.js';
 import type { ArchiveEntry } from '../src/archive.js';
 
@@ -21,6 +21,12 @@ describe('discover', () => {
       ],
     }));
     expect(await findIplLeagueId(client)).toBe('8');
+  });
+
+  it('findLeagueId picks a league by exact name and throws when absent', async () => {
+    const client = stub(() => ({ data: [{ id: 1, name: 'Big Bash League' }, { id: 8, name: 'Indian Premier League' }] }));
+    expect(await findLeagueId(client, 'Big Bash League')).toBe('1');
+    await expect(findLeagueId(client, 'Nope')).rejects.toThrow(/Nope/);
   });
 
   it('findIplLeagueId throws when absent', async () => {

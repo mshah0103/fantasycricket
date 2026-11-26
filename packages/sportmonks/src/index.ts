@@ -7,3 +7,5 @@ export * from './fieldMap.js';
 export * from './normalize/index.js';
 export * from './normalize/meta.js';
 export * from './history.js';
+export * from './record.js';
+export * from './replay.js';

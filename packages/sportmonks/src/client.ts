@@ -38,10 +38,13 @@ export function createClient(opts: {
   maxPerHourPerEndpoint?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
+  /** Per-request timeout; a timed-out request is a network error (retried). Default 30000. */
+  timeoutMs?: number;
 }): SportmonksClient {
   const baseUrl = opts.baseUrl ?? BASE_URL;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const timeoutMs = opts.timeoutMs ?? 30_000;
   const now = opts.now ?? (() => new Date());
   const limiter = new RateLimiter(opts.maxPerHourPerEndpoint ?? 1500, () => now().getTime(), sleep);
 
@@ -58,7 +61,7 @@ export function createClient(opts: {
         let ok: boolean;
         let body: unknown;
         try {
-          const res = await fetchImpl(url.toString());
+          const res = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(timeoutMs) });
           status = res.status;
           ok = res.ok;
           const text = await res.text();

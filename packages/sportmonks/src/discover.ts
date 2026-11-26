@@ -31,11 +31,15 @@ function asList(x: unknown): Obj[] {
 const str = (x: unknown): string => (x === null || x === undefined ? '' : String(x));
 // ---------------------------------------------------------------------------
 
-export async function findIplLeagueId(client: SportmonksClient): Promise<string> {
+export async function findLeagueId(client: SportmonksClient, name: string): Promise<string> {
   const { body } = await client.get(paths.leagues);
-  const league = asList(body).find((l) => l.name === 'Indian Premier League');
-  if (!league) throw new Error('League "Indian Premier League" not found in GET /leagues response');
+  const league = asList(body).find((l) => l.name === name);
+  if (!league) throw new Error(`League "${name}" not found in GET /leagues response`);
   return str(league.id);
+}
+
+export async function findIplLeagueId(client: SportmonksClient): Promise<string> {
+  return findLeagueId(client, 'Indian Premier League');
 }
 
 export async function listIplSeasons(

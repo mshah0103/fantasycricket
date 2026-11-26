@@ -67,3 +67,26 @@ export function runOutCreditedFielder(rec: {
   const id = rec.runout_by_id;
   return id === null ? null : String(id);
 }
+
+// --- Fixture status groups (Sportmonks Cricket v2 docs, "Statuses and definitions") ---
+// Do NOT use the fixture's `live` boolean: it is true on finished fixtures (FIELD_MAP §1).
+export const PRE_STATUSES: readonly string[] = ['NS', 'Delayed'];
+export const LIVE_STATUSES: readonly string[] = [
+  '1st Innings', '2nd Innings', '3rd Innings', '4th Innings', 'Innings Break', 'Int.', 'Tea Break', 'Lunch', 'Dinner',
+  'Stump Day 1', 'Stump Day 2', 'Stump Day 3', 'Stump Day 4',
+];
+/** Terminal for polling. */
+export const FINISHED_STATUSES: readonly string[] = ['Finished', 'Aban.', 'Cancl.', 'Postp.'];
+
+export type StatusGroup = 'pre' | 'live' | 'finished';
+
+export function isKnownStatus(status: string): boolean {
+  return PRE_STATUSES.includes(status) || LIVE_STATUSES.includes(status) || FINISHED_STATUSES.includes(status);
+}
+
+/** Unknown strings are `live`: polling fast is the safe side within the rate limit. */
+export function statusGroup(status: string): StatusGroup {
+  if (PRE_STATUSES.includes(status)) return 'pre';
+  if (FINISHED_STATUSES.includes(status)) return 'finished';
+  return 'live';
+}

@@ -66,6 +66,27 @@ describe('sportmonks client', () => {
     expect(sleep.mock.calls.map((c) => c[0])).toEqual([1000, 2000, 4000, 8000]);
   });
 
+  it('times out a hung request as a network error, retried with the usual backoff, with no URL or token in the error', async () => {
+    const { archive } = fakeArchive();
+    const fetchImpl = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_res, rej) => {
+          const signal = init?.signal;
+          if (!signal) return; // no timeout signal passed: hangs forever
+          signal.addEventListener('abort', () => rej(signal.reason));
+        }),
+    );
+    const sleep = vi.fn(async (_ms: number) => {});
+    const client = createClient({ token: TOKEN, archive, fetchImpl: fetchImpl as unknown as typeof fetch, sleep, timeoutMs: 20 });
+    const err = await client.get('/fixtures/9').catch((e) => e);
+    expect(err).toBeInstanceOf(SportmonksError);
+    expect(err.status).toBe(0);
+    expect(String(err.message)).not.toContain(TOKEN);
+    expect(String(err.message)).not.toContain('api_token');
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([1000, 2000, 4000, 8000]);
+  });
+
   it('throws SportmonksError on 401 without retry or token leak, archiving it', async () => {
     const { archive, saved } = fakeArchive();
     const fetchImpl = vi.fn(async () => json(401, { message: 'bad' }));
