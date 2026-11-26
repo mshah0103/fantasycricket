@@ -10,3 +10,6 @@ export * from './history.js';
 export * from './record.js';
 export * from './replay.js';
 export * from './gates.js';
+export { findLeagueId, findIplLeagueId, listIplSeasons, listSeasonFixtures, type FixtureListing } from './discover.js';
+export { battingAndFielding } from './normalize/batting.js';
+export { bowlingFromBalls } from './normalize/bowling.js';

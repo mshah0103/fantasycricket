@@ -189,6 +189,30 @@ describe('manifest redaction', () => {
   });
 });
 
+describe('non-JSON bodies', () => {
+  it('archives a non-JSON body as { raw } with the token redacted', async () => {
+    const { archive, saved } = fakeArchive();
+    const html = `<html>Bad gateway for /api/v2.0/fixtures/9?api_token=${TOKEN}&include=x (token ${encodeURIComponent(TOKEN)})</html>`;
+    const fetchImpl = vi.fn(async () => new Response(html, { status: 200 }));
+    const client = createClient({ token: TOKEN, archive, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const { body } = await client.get('/fixtures/9');
+    expect(body).toEqual({ raw: '<html>Bad gateway for /api/v2.0/fixtures/9?api_token=[REDACTED]&include=x (token [REDACTED])</html>' });
+    expect(JSON.stringify(saved)).not.toContain(TOKEN);
+  });
+
+  it('redacts on disk too (file archive)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cli-'));
+    const archive = createFileArchive(root);
+    const fetchImpl = vi.fn(async () => new Response(`oops ${TOKEN}`, { status: 502 }));
+    const client = createClient({ token: TOKEN, archive, fetchImpl: fetchImpl as unknown as typeof fetch, sleep: async () => {} });
+    await client.get('/livescores').catch(() => {});
+    const entries = [];
+    for await (const e of archive.entries()) entries.push(e);
+    expect(entries).toHaveLength(5);
+    for (const e of entries) expect(JSON.stringify(await archive.readBody(e))).toBe(JSON.stringify({ raw: 'oops [REDACTED]' }));
+  });
+});
+
 describe('loadConfig', () => {
   it('reads token and data dir with default', () => {
     expect(loadConfig({ SPORTMONKS_API_TOKEN: 'x' })).toEqual({ token: 'x', dataDir: resolve(findRepoRoot(), 'data') });

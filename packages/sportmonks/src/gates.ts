@@ -120,6 +120,29 @@ const PENDING_NO_SCORES = 'Pending: no archived /scores body; run sm:pull-histor
 const scoreName = (catalog: ScoreCatalog, rec: Obj): string => catalog.get(str(rec.score_id))?.name ?? '';
 const idOrNull = (x: unknown): string | null => (typeof x === 'number' ? String(x) : null);
 
+/**
+ * The current run-out credit rule in words, found by probing `rule` (default `runOutCreditedFielder`), so that the
+ * report follows the code when the commissioner changes the rule (FIELD_MAP §5.2).
+ */
+export function describeRunOutRule(rule: typeof runOutCreditedFielder = runOutCreditedFielder): { short: string; sentence: string } {
+  const both = rule({ runout_by_id: 2, catch_stump_player_id: 1 });
+  const loneCatchStump = rule({ runout_by_id: null, catch_stump_player_id: 1 }) !== null;
+  const loneRunoutBy = rule({ runout_by_id: 2, catch_stump_player_id: null }) !== null;
+  const primary = both === '2' ? '`runout_by_id`' : both === '1' ? '`catch_stump_player_id`' : null;
+  const short =
+    primary === '`runout_by_id`'
+      ? `\`runout_by_id\`${loneCatchStump ? ', else `catch_stump_player_id`' : ' only'}`
+      : primary === '`catch_stump_player_id`'
+        ? `\`catch_stump_player_id\`${loneRunoutBy ? ', else `runout_by_id`' : ' only'}`
+        : 'see `runOutCreditedFielder`';
+  const sentence = [
+    primary ? `with both ids the credited fielder is ${primary}` : 'with both ids no single fielder is credited',
+    loneCatchStump ? 'a lone `catch_stump_player_id` is credited' : 'a lone `catch_stump_player_id` is not credited',
+    loneRunoutBy ? 'a lone `runout_by_id` is credited' : 'a lone `runout_by_id` is not credited',
+  ].join('; ');
+  return { short, sentence: `${sentence}. A run-out with no credited fielder is flagged \`runout_fielder_missing\`.` };
+}
+
 function gate1(scan: Scan): string {
   if (!scan.catalog) return PENDING_NO_SCORES;
   const catalog = scan.catalog;
@@ -153,12 +176,13 @@ function gate1(scan: Scan): string {
   // Most recent season first; within a season by fixture id then batter.
   twoFielder.sort((a, b) => b.f.year - a.f.year || Number(a.f.id) - Number(b.f.id) || cmp(a.batter, b.batter));
   const sample = twoFielder.slice(0, 10).map((s) => [s.f.id, s.f.year, str(s.f.data.round), str(s.f.data.starting_at).slice(0, 10), s.batter, s.cs, s.ro]);
+  const rule = describeRunOutRule();
   return [
-    `Run-outs per season and who the source names. "Credited" is the share with a fielder under the current rule (\`runOutCreditedFielder\`: \`runout_by_id\` only).`,
+    `Run-outs per season and who the source names. "Credited" is the share with a fielder under the current rule (\`runOutCreditedFielder\`: ${rule.short}).`,
     '',
     table(['Season', 'Run-outs', 'With runout_by_id', 'Only catch_stump_player_id', 'Neither', 'Credited (current rule)'], rows),
     '',
-    `Current rule: the credited fielder is \`runout_by_id\` (spec §5.6). A lone \`catch_stump_player_id\` is not credited and the run-out is flagged \`runout_fielder_missing\`. Which fielder to credit, and whether a lone \`catch_stump_player_id\` counts, is a pending commissioner decision (FIELD_MAP §5.2).`,
+    `Current rule (read from \`runOutCreditedFielder\`): ${rule.sentence} Which fielder to credit, and whether a lone \`catch_stump_player_id\` counts, is a pending commissioner decision (spec §5.6, FIELD_MAP §5.2).`,
     '',
     `Sample of ${sample.length} two-fielder run-outs (of ${twoFielder.length}) for the manual ESPNcricinfo check. \`catch_stump_player_id\` is the first fielder, \`runout_by_id\` the second:`,
     '',
@@ -394,19 +418,31 @@ async function gate7(recs: Recording[], scan: Scan, archive: RawArchive): Promis
   if (!recs.length) return NO_RECORDINGS;
   if (!scan.catalog) return PENDING_NO_SCORES;
   const catalog = scan.catalog;
-  const scoresOf = (body: unknown): Map<string, number> => {
-    const m = new Map<string, number>();
-    for (const p of normalizeFixture(body, catalog).players) m.set(p.playerId, scorePlayerMatch(p).totalHalfPoints);
-    return m;
-  };
-  const diff = (a: Map<string, number>, b: Map<string, number>): string[] => {
-    const out: string[] = [];
-    for (const id of [...new Set([...a.keys(), ...b.keys()])].sort((x, y) => Number(x) - Number(y))) {
-      const x = a.get(id) ?? 0;
-      const y = b.get(id) ?? 0;
-      if (x !== y) out.push(`player ${id}: ${x} -> ${y} half-points`);
+  /** Half-points per player, or the first line of the normalizer's error (a bad snapshot is reported, as in gate 3). */
+  const scoresOf = (body: unknown): Map<string, number> | { error: string } => {
+    try {
+      const m = new Map<string, number>();
+      for (const p of normalizeFixture(body, catalog).players) m.set(p.playerId, scorePlayerMatch(p).totalHalfPoints);
+      return m;
+    } catch (e) {
+      return { error: (e instanceof Error ? e.message : String(e)).split('\n')[0]!.slice(0, 120) };
     }
-    return out;
+  };
+  /** "N player(s) changed" + details; a player with no record on one side is "absent", not 0. */
+  type Side = { label: string; name: string; body: unknown };
+  const compare = (a: Side, b: Side): string[] => {
+    const head = `${a.label} vs ${b.label}`;
+    const before = scoresOf(a.body);
+    const after = scoresOf(b.body);
+    if (!(before instanceof Map)) return [`- ${head}: cannot compare: ${a.name} does not normalize (${before.error}).`];
+    if (!(after instanceof Map)) return [`- ${head}: cannot compare: ${b.name} does not normalize (${after.error}).`];
+    const fmt = (v: number | undefined): string => (v === undefined ? 'absent' : `${v}`);
+    const out: string[] = [];
+    for (const id of [...new Set([...before.keys(), ...after.keys()])].sort((p, q) => Number(p) - Number(q))) {
+      const [u, v] = [before.get(id), after.get(id)];
+      if (u !== v) out.push(`  - player ${id}: ${fmt(u)} -> ${fmt(v)}${v === undefined ? '' : ' half-points'}`);
+    }
+    return [`- ${head}: ${out.length ? `${out.length} player(s) changed` : 'no score changes'}.`, ...out];
   };
   const lines: string[] = [];
   for (const r of recs) {
@@ -419,15 +455,23 @@ async function gate7(recs: Recording[], scan: Scan, archive: RawArchive): Promis
     } else if (firstFinished.seq === last.seq) {
       lines.push(`- Only one finished snapshot (#${last.seq}); no post-match snapshot to compare against.`);
     } else {
-      const d = diff(scoresOf(firstFinished.body), scoresOf(last.body));
-      lines.push(`- First finished snapshot #${firstFinished.seq} (${firstFinished.fetchedAt}) vs last snapshot #${last.seq} (${last.fetchedAt}): ${d.length ? `${d.length} player(s) changed` : 'no score changes'}.`, ...d.map((x) => `  - ${x}`));
+      lines.push(
+        ...compare(
+          { label: `First finished snapshot #${firstFinished.seq} (${firstFinished.fetchedAt})`, name: `snapshot #${firstFinished.seq}`, body: firstFinished.body },
+          { label: `last snapshot #${last.seq} (${last.fetchedAt})`, name: `snapshot #${last.seq}`, body: last.body },
+        ),
+      );
     }
     const entry = scan.latestFixtureEntry.get(fixtureId);
     if (!entry || entry.fetchedAt <= last.fetchedAt) {
       lines.push('- No history pull of this fixture after the last snapshot in the archive; pull it later to compare.');
     } else {
-      const d = diff(scoresOf(last.body), scoresOf(await archive.readBody(entry)));
-      lines.push(`- Last snapshot vs the history pull at ${entry.fetchedAt}: ${d.length ? `${d.length} player(s) changed` : 'no score changes'}.`, ...d.map((x) => `  - ${x}`));
+      lines.push(
+        ...compare(
+          { label: `Last snapshot #${last.seq}`, name: `snapshot #${last.seq}`, body: last.body },
+          { label: `the history pull at ${entry.fetchedAt}`, name: 'the history pull', body: await archive.readBody(entry) },
+        ),
+      );
     }
     lines.push('');
   }

@@ -27,6 +27,13 @@ function errorCode(e: unknown): string | undefined {
   return pick(e) ?? pick((e as { cause?: unknown } | null)?.cause);
 }
 
+/** `text` with every occurrence of the token (plain or URL-encoded) replaced by `[REDACTED]`. */
+function redact(text: string, token: string): string {
+  let out = text;
+  for (const t of new Set([token, encodeURIComponent(token)])) if (t) out = out.split(t).join('[REDACTED]');
+  return out;
+}
+
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [1000, 2000, 4000, 8000];
 
@@ -68,7 +75,8 @@ export function createClient(opts: {
           try {
             body = text ? JSON.parse(text) : null;
           } catch {
-            body = { raw: text };
+            // A non-JSON body (an HTML error page, say) may echo the request URL: never archive the token.
+            body = { raw: redact(text, opts.token) };
           }
         } catch (e) {
           // Only the error code is kept: messages may embed the request URL (and token).

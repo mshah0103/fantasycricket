@@ -65,3 +65,12 @@ describe('discover', () => {
     }
   });
 });
+
+describe('barrel', () => {
+  it('exports discovery and the normalizer building blocks from @fc/sportmonks', async () => {
+    const barrel = await import('../src/index.js');
+    for (const name of ['findLeagueId', 'findIplLeagueId', 'listIplSeasons', 'listSeasonFixtures', 'battingAndFielding', 'bowlingFromBalls', 'resolveSquadTeamIds']) {
+      expect(typeof (barrel as Record<string, unknown>)[name]).toBe('function');
+    }
+  });
+});

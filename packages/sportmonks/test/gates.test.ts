@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFileArchive, type RawArchive } from '../src/archive.js';
-import { GATES_END_MARKER, buildGateReport, mergeGateReport } from '../src/gates.js';
+import { GATES_END_MARKER, buildGateReport, describeRunOutRule, mergeGateReport } from '../src/gates.js';
 import { buildHistory, type CricsheetLinks } from '../src/history.js';
 
 type Obj = Record<string, any>;
@@ -50,6 +50,24 @@ async function writeRecording(): Promise<void> {
 }
 
 const md6 = (md: string): string => md.split(/^## Gate 6\b/m)[1]!.split(/^## Gate 7\b/m)[0]!;
+const md7 = (md: string): string => md.split(/^## Gate 7\b/m)[1]!.split(/^## Gate 8\b/m)[0]!;
+
+/** A recording of m64 with the given bodies (NS first, then each body as a Finished snapshot, 10 min apart). */
+async function writeFinishedRecording(bodies: Obj[]): Promise<void> {
+  const dir = join(recordingsDir, '65607');
+  await mkdir(dir, { recursive: true });
+  const startMs = Date.parse(load('ipl2025-m64-gt-lsg.json').data.starting_at as string);
+  const ns = load('ipl2025-m64-gt-lsg.json');
+  ns.data.status = 'NS';
+  ns.data.balls = [];
+  const lines: string[] = [];
+  for (const [i, body] of [ns, ...bodies].entries()) {
+    const seq = i + 1;
+    await writeFile(join(dir, `${seq}.json.gz`), gzipSync(Buffer.from(JSON.stringify(body))));
+    lines.push(JSON.stringify({ seq, fetchedAt: new Date(startMs + (4 * 60 + 10 * i) * 60_000).toISOString(), status: i === 0 ? 'NS' : 'Finished' }));
+  }
+  await writeFile(join(dir, 'timeline.jsonl'), lines.join('\n') + '\n');
+}
 
 describe('buildGateReport', () => {
   it('has a section per gate and lists the Super Over fixture under Gate 3', async () => {
@@ -122,6 +140,44 @@ describe('buildGateReport', () => {
       const section = md.split(new RegExp(`^## Gate ${g}\\b`, 'm'))[1]!.split(new RegExp(`^## Gate ${next}\\b|${GATES_END_MARKER}`, 'm'))[0]!;
       expect(section).toContain('Pending');
     }
+  });
+});
+
+describe('Gate 1 run-out rule text', () => {
+  it('is read from runOutCreditedFielder, not hard-coded', async () => {
+    const g1 = (await buildGateReport({ historyDir, recordingsDir, archive })).split(/^## Gate 1\b/m)[1]!.split(/^## Gate 2\b/m)[0]!;
+    expect(g1).toContain('(`runOutCreditedFielder`: `runout_by_id` only)');
+    expect(g1).toContain(
+      'Current rule (read from `runOutCreditedFielder`): with both ids the credited fielder is `runout_by_id`; a lone `catch_stump_player_id` is not credited; a lone `runout_by_id` is credited.',
+    );
+    // The commissioner's possible change (FIELD_MAP §5.2): fall back to catch_stump_player_id.
+    const fallback = describeRunOutRule((r) => (r.runout_by_id ?? r.catch_stump_player_id)?.toString() ?? null);
+    expect(fallback.short).toBe('`runout_by_id`, else `catch_stump_player_id`');
+    expect(fallback.sentence).toContain('a lone `catch_stump_player_id` is credited;');
+    expect(fallback.sentence).not.toContain('is not credited');
+  });
+});
+
+describe('Gate 7', () => {
+  it('a player missing from one snapshot is "absent", not 0', async () => {
+    const early = load('ipl2025-m64-gt-lsg.json');
+    early.data.lineup = (early.data.lineup as Obj[]).filter((p) => p.id !== 9921); // Anuj Rawat: lineup only, 0 points
+    await writeFinishedRecording([early, load('ipl2025-m64-gt-lsg.json')]);
+    const g7 = md7(await buildGateReport({ historyDir, recordingsDir, archive }));
+    expect(g7).toContain('1 player(s) changed');
+    expect(g7).toContain('player 9921: absent -> 0 half-points');
+    // Against the history pull, he is in both: no change.
+    expect(g7).toMatch(/vs the history pull at [^:]+:\d\d:[\d.]+Z: no score changes/);
+  });
+
+  it('a snapshot that does not normalize is reported in the section, not fatal', async () => {
+    const bad = { data: { id: 65607, status: 'Finished' } };
+    await writeFinishedRecording([bad, load('ipl2025-m64-gt-lsg.json')]);
+    const md = await buildGateReport({ historyDir, recordingsDir, archive });
+    const g7 = md7(md);
+    expect(g7).toMatch(/First finished snapshot #2 .* cannot compare: snapshot #2 does not normalize \(/);
+    expect(g7).toContain('no score changes'); // the last snapshot vs the history pull still compares
+    expect(md).toMatch(/^## Gate 8\b/m);
   });
 });
 

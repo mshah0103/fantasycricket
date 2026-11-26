@@ -137,7 +137,7 @@ export function battingAndFielding(
       else {
         flag(
           'runout_fielder_missing',
-          `${where}: run-out with runout_by_id null; catch_stump_player_id ${fielderId ?? 'none'} not credited`,
+          `${where}: run-out with no fielder credited under the current rule (runout_by_id ${rec.runout_by_id ?? 'none'}, catch_stump_player_id ${fielderId ?? 'none'})`,
           batterId,
         );
       }

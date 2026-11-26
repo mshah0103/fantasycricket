@@ -5,7 +5,11 @@ export interface FixtureMeta {
   leagueId: string;
   seasonId: string;
   startingAt: string; // UTC ISO 8601
-  status: string; // FIELD_MAP §1: "Finished" or "Aban."
+  /**
+   * Sportmonks (FIELD_MAP §1): "Finished" or "Aban."; a no-result needs `draw_noresult` too, which this does not
+   * carry (it can come with either status). Cricsheet imports: "Finished" or "No result".
+   */
+  status: string;
   round: string | null;
   localTeamId: string;
   visitorTeamId: string;

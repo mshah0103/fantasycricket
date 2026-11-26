@@ -34,11 +34,12 @@ export type FlagCode =
   | 'runout_fielder_missing' | 'sub_fielder_unidentified' | 'unknown_dismissal'
   | 'ball_data_missing' | 'bowling_card_mismatch' | 'unparseable_record';
 
+/** `fixtureId`/`playerId` use the same id scheme as `PlayerMatchStats`. A flag with no `playerId` is about the fixture. */
 export interface DataFlag { code: FlagCode; fixtureId: string; playerId?: string; detail: string; }
 
 export interface PlayerMatchStats {
-  fixtureId: string;             // Sportmonks fixture id, as string
-  playerId: string;              // Sportmonks player id, as string
+  fixtureId: string;             // Sportmonks id as string, or `cs:`-prefixed Cricsheet id for seasons imported from Cricsheet
+  playerId: string;              // Sportmonks id as string, or `cs:`-prefixed Cricsheet id for seasons imported from Cricsheet
   teamId: string;
   regulation: PhaseStats;
   superOver: PhaseStats | null;  // all Super Overs aggregated; null = none
