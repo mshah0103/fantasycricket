@@ -10,6 +10,7 @@
     "sm:list-fixtures": "tsx --env-file-if-exists=../../.env src/cli/list-fixtures.ts",
     "sm:pull-history": "tsx --env-file-if-exists=../../.env src/cli/pull-history.ts",
     "sm:pull-squads": "tsx --env-file-if-exists=../../.env src/cli/pull-squads.ts",
+    "sm:build-history": "tsx --env-file-if-exists=../../.env src/cli/build-history.ts",
     "sm:export-fixture": "tsx --env-file-if-exists=../../.env src/cli/export-fixture.ts"
   },
   "dependencies": {
