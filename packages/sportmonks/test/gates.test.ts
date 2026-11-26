@@ -57,6 +57,9 @@ describe('buildGateReport', () => {
     const gate3 = md.split(/^## Gate 3\b/m)[1]!.split(/^## Gate 4\b/m)[0]!;
     expect(gate3).toContain('65574');
     expect(gate3).toContain('S3');
+    expect(gate3).toContain('none detected');
+    expect(gate3).toContain('15267');
+    expect(gate3).toMatch(/not that the data is complete/);
     expect(md.trimEnd().endsWith(GATES_END_MARKER)).toBe(true);
     const gate5 = md.split(/^## Gate 5\b/m)[1]!.split(/^## Gate 6\b/m)[0]!;
     expect(gate5).toContain('65607');
@@ -78,6 +81,29 @@ describe('buildGateReport', () => {
       const section = md.split(new RegExp(`^## Gate ${g}\\b`, 'm'))[1]!.split(new RegExp(`^## Gate ${next}\\b|${GATES_END_MARKER}`, 'm'))[0]!;
       expect(section).toContain('Pending');
     }
+  });
+});
+
+describe('Gate 8 squads', () => {
+  it('counts positions, lists players without one and shows the distribution', async () => {
+    const t = new Date(Date.UTC(2026, 11, 20));
+    await archive.save('/leagues', {}, 200, { data: [{ id: 1, name: 'Indian Premier League' }] }, t);
+    await archive.save('/seasons', { 'filter[league_id]': '1' }, 200, { data: [{ id: 1795, league_id: 1, name: '2026' }, { id: 2001, league_id: 1, name: '2027' }] }, t);
+    const player = (id: number, fullname: string, position: unknown) => ({ resource: 'players', id, fullname, firstname: 'x', lastname: 'y', position, squad: { season_id: 2001 } });
+    await archive.save('/teams/8/squad/2001', {}, 200, {
+      data: {
+        resource: 'teams', id: 8, name: 'Team', code: 'T',
+        squad: [player(11, 'Has Position', { resource: 'positions', id: 3, name: 'Wicketkeeper' }), player(12, 'No Position', null)],
+      },
+    }, t);
+    const md = await buildGateReport({ historyDir, recordingsDir, archive });
+    const g8 = md.split(/^## Gate 8\b/m)[1]!;
+    expect(g8).toContain('season 2001');
+    expect(g8).toContain('2 players. With a position: 1. Without: 1.');
+    expect(g8).toContain('| 12 | No Position | 8 |');
+    expect(g8).not.toContain('Has Position');
+    expect(g8).toContain('| 3 Wicketkeeper | 1 |');
+    expect(g8).not.toContain('Pending');
   });
 });
 

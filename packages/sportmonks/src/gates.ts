@@ -208,7 +208,7 @@ function gate3(scan: Scan): string {
       try {
         const n = normalizeFixture({ data: f.data }, scan.catalog);
         const m = n.flags.some((fl) => fl.code === 'ball_data_missing' && fl.playerId === undefined && fl.detail.includes('Super Over'));
-        missing = m ? 'yes' : 'no';
+        missing = m ? 'yes' : 'none detected';
         if (m) withoutDetail++;
       } catch {
         missing = 'unparseable';
@@ -217,7 +217,7 @@ function gate3(scan: Scan): string {
     rows.push([f.id, f.year, str(f.data.round), [...fixtureCodes].sort(cmp).join(', '), missing]);
   }
   return [
-    `Fixtures with \`super_over: true\`: ${rows.length}, of which ${withoutDetail} have no Super Over ball/innings detail (normalizer flag \`ball_data_missing\`). Scoreboard codes seen across all IPL fixtures in batting, bowling and balls: ${[...codes].sort(cmp).join(', ') || 'none'} (S1/S2 regulation, S3+ Super Over).`,
+    `Fixtures with \`super_over: true\`: ${rows.length}, of which ${withoutDetail} have no Super Over ball/innings detail (normalizer flag \`ball_data_missing\`). Scoreboard codes seen across all IPL fixtures in batting, bowling and balls: ${[...codes].sort(cmp).join(', ') || 'none'} (S1/S2 regulation, S3+ Super Over). Repeat Super Overs (a 3rd or later tie-break, known case 2020 m36 / 15267, FIELD_MAP §2.2) cannot be detected: \`runs[]\` stops at inning 4, so "none detected" means no gap is detectable, not that the data is complete.`,
     '',
     table(['Fixture', 'Season', 'Round', 'Scoreboard codes', 'Super Over detail missing'], rows),
   ].join('\n');
