@@ -21,7 +21,7 @@ export function findRepoRoot(from: string = dirname(fileURLToPath(import.meta.ur
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): SportmonksConfig {
   const token = env.SPORTMONKS_API_TOKEN;
   if (!token) {
-    throw new Error('SPORTMONKS_API_TOKEN is not set; export it before using the Sportmonks client');
+    throw new Error('SPORTMONKS_API_TOKEN is not set; put it in .env at the repo root (sm:* scripts load it) or export it');
   }
   return { token, dataDir: resolve(findRepoRoot(), env.FC_DATA_DIR || 'data') };
 }

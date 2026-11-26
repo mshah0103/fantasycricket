@@ -7,10 +7,10 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "sm:list-fixtures": "tsx src/cli/list-fixtures.ts",
-    "sm:pull-history": "tsx src/cli/pull-history.ts",
-    "sm:pull-squads": "tsx src/cli/pull-squads.ts",
-    "sm:export-fixture": "tsx src/cli/export-fixture.ts"
+    "sm:list-fixtures": "tsx --env-file-if-exists=../../.env src/cli/list-fixtures.ts",
+    "sm:pull-history": "tsx --env-file-if-exists=../../.env src/cli/pull-history.ts",
+    "sm:pull-squads": "tsx --env-file-if-exists=../../.env src/cli/pull-squads.ts",
+    "sm:export-fixture": "tsx --env-file-if-exists=../../.env src/cli/export-fixture.ts"
   },
   "dependencies": {
     "@fc/scoring": "workspace:*",
