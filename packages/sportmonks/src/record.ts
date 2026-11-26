@@ -92,7 +92,11 @@ export async function recordFixture(
     } catch (e) {
       if (!(e instanceof SportmonksError)) throw e;
       await appendFile(timelinePath, JSON.stringify({ seq: null, fetchedAt: now().toISOString(), error: e.message }) + '\n');
-      log(`poll failed (${e.message}); retrying in ${ERROR_RETRY_MS}ms`);
+      // 4xx other than 429 (bad token, forbidden, wrong fixture id) will not fix itself: fail fast.
+      if (e.status >= 400 && e.status < 500 && e.status !== 429) {
+        throw new Error(`Recording fixture ${fixtureId} stopped: Sportmonks responded with HTTP ${e.status} (not retryable)`);
+      }
+      log(`#- error: ${e.message}; retrying in ${ERROR_RETRY_MS / 1000}s`);
       await sleep(ERROR_RETRY_MS);
       continue;
     }

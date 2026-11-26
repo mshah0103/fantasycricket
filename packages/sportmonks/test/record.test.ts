@@ -155,4 +155,53 @@ describe('recordFixture', () => {
     expect(lines.map((l) => l.seq)).toEqual([7, 8]);
     expect(existsSync(join(dir, '8.json.gz'))).toBe(true);
   });
+
+  it('fails fast on a 401 (error line written, no sleep) but keeps retrying 503s, logging each failure', async () => {
+    const mkClient = (script: (unknown | Error)[], clock: () => number): SportmonksClient => ({
+      async get(path, query) {
+        const next = script.shift()!;
+        if (next instanceof Error) throw next;
+        return { body: next, entry: { endpoint: path, params: query ?? {}, fetchedAt: new Date(clock()).toISOString(), status: 200, file: 'x' } as ArchiveEntry };
+      },
+    });
+    const dir1 = await mkdtemp(join(tmpdir(), 'rec-'));
+    const sleeps1: number[] = [];
+    await expect(
+      recordFixture(mkClient([new SportmonksError('Sportmonks /fixtures/:id responded with HTTP 401', 401, '/fixtures/:id')], () => 0), '777', dir1, {
+        now: () => new Date(0),
+        sleep: async (ms) => void sleeps1.push(ms),
+      }),
+    ).rejects.toThrow(/777.*401/);
+    expect(sleeps1).toEqual([]);
+    const l1 = (await readFile(join(dir1, 'timeline.jsonl'), 'utf8')).trim().split('\n');
+    expect(l1).toHaveLength(1);
+    expect(JSON.parse(l1[0]!)).toMatchObject({ seq: null });
+
+    const dir2 = await mkdtemp(join(tmpdir(), 'rec-'));
+    let clock = at(400).getTime();
+    // An old Finished line makes the 2 h window already over, so the run ends after the first good poll.
+    await writeFile(join(dir2, 'timeline.jsonl'), JSON.stringify({ seq: 1, fetchedAt: at(200).toISOString(), status: 'Finished', lineupPresent: true, ballsCount: 1 }) + '\n');
+    const sleeps2: number[] = [];
+    const logs: string[] = [];
+    const client2 = mkClient(
+      [
+        new SportmonksError('Sportmonks /fixtures/:id responded with HTTP 503', 503, '/fixtures/:id'),
+        new SportmonksError('Sportmonks /fixtures/:id failed: network error', 0, '/fixtures/:id'),
+        snapshot('Finished', { lineup: 22 }),
+      ],
+      () => clock,
+    );
+    await recordFixture(client2, '777', dir2, {
+      now: () => new Date(clock),
+      sleep: async (ms) => {
+        sleeps2.push(ms);
+        clock += ms;
+      },
+      log: (l) => logs.push(l),
+    });
+    expect(sleeps2).toEqual([30_000, 30_000]);
+    expect(logs.filter((l) => l.startsWith('#- error:'))).toHaveLength(2);
+    expect(logs[0]).toContain('503');
+    expect(logs[0]).toContain('retrying in 30s');
+  });
 });

@@ -12,10 +12,15 @@ const fixtureId = flag(argv, 'fixture');
 if (!fixtureId || !/^\d+$/.test(fixtureId)) throw new Error('--fixture <id> is required (numeric fixture id)');
 const { token, dataDir } = loadConfig();
 const dir = flag(argv, 'dir') ?? join(dataDir, 'recordings', fixtureId);
-const client = createClient({ token, archive: createFileArchive(dataDir) });
+const client = createClient({ token, archive: createFileArchive(dataDir), timeoutMs: 10_000 });
 
 console.log(`recording fixture ${fixtureId} into ${dir}`);
-await recordFixture(client, fixtureId, dir, {
-  log: (line) => console.log(`${new Date().toISOString()} ${line}`),
-});
-console.log('done');
+try {
+  await recordFixture(client, fixtureId, dir, {
+    log: (line) => console.log(`${new Date().toISOString()} ${line}`),
+  });
+  console.log('done');
+} catch (e) {
+  console.error(e instanceof Error ? e.message : 'recording failed');
+  process.exit(1);
+}
