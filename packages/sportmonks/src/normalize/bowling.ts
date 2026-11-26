@@ -61,8 +61,8 @@ function classify(s: BallRecord['score']): Delivery | null | string {
   if (s.ball === false && !wide) return null;
   const noBall = s.noball === 1;
   const legal = !wide && !noBall;
-  // On a wide every run is a wide charged to the bowler (byes off a wide included); otherwise
-  // `runs` holds batter runs plus the no-ball run, and byes/leg-byes are not in it.
+  // Controller ruling (Task 8 review, Minor 1): all runs off a wide, byes included (id 18 `1 Wide + 4 Bye`), are wides charged to the bowler (spec §5.5).
+  // Otherwise `runs` holds batter runs plus the no-ball run, and byes/leg-byes are not in it.
   const conceded = wide ? s.runs + s.bye : s.runs;
   const teamRuns = s.runs + s.bye + s.leg_bye;
   let wicket = false;

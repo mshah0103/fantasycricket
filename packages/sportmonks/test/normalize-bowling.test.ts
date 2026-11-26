@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import type { BowlingStats } from '@fc/scoring';
+import { scorePlayerMatch, type BowlingStats } from '@fc/scoring';
 import { buildScoreCatalog } from '../src/fieldMap.js';
 import { fixtureMeta } from '../src/normalize/meta.js';
 import { battingAndFielding } from '../src/normalize/batting.js';
 import { bowlingFromBalls } from '../src/normalize/bowling.js';
+import { normalizeFixture } from '../src/normalize/index.js';
 
 type Obj = Record<string, any>;
 const load = (name: string): Obj =>
@@ -29,13 +30,27 @@ function scoreObj(id: number): Obj {
 const NO_RUN = 82;
 const LEG_BYE_1 = 4;
 
-/** The ball records of `bowlerId` on `scoreboard` at over index `over` (mutable, for synthetic variants). */
+/** The ball records on `scoreboard` at over index `over` (mutable, for synthetic variants). */
 function overBalls(body: Obj, scoreboard: string, over: number): Obj[] {
   return (body.data.balls as Obj[]).filter((b) => b.scoreboard === scoreboard && Math.floor(b.ball) === over);
 }
 
 function bowling(body: Obj, playerId: string, phase: 'regulation' | 'superOver'): BowlingStats | null {
   return bowlingFromBalls(body).byPlayerPhase.get(playerId)?.[phase] ?? null;
+}
+
+/** The one ball record of `bowlerId` on `scoreboard` numbered `ball` (mutable, for synthetic variants). */
+function ballAt(body: Obj, scoreboard: string, bowlerId: number, ball: number): Obj {
+  const found = (body.data.balls as Obj[]).filter((b) => b.scoreboard === scoreboard && b.bowler_id === bowlerId && b.ball === ball);
+  if (found.length !== 1) throw new Error(`expected one ball ${scoreboard} ${ball} by ${bowlerId}, found ${found.length}`);
+  return found[0]!;
+}
+
+/** Replaces a ball's score with the catalog entry `id`, checking the name so the table stays readable. */
+function setScore(ball: Obj, id: number, name: string): void {
+  ball.score = scoreObj(id);
+  ball.score_id = id;
+  expect(ball.score.name).toBe(name);
 }
 
 const cardOnly = (legalBalls: number, runsConceded: number, wickets: number): BowlingStats => ({
@@ -166,6 +181,76 @@ describe('bowlingFromBalls: maidens (grouped by scoreboard, over and bowler)', (
     const { byPlayerPhase } = bowlingFromBalls(body);
     expect(byPlayerPhase.get('8394')?.regulation?.maidens).toBe(0);
     expect(byPlayerPhase.get('3152')?.regulation?.maidens).toBe(0);
+  });
+});
+
+describe('bowlingFromBalls: per-delivery classification (synthetic edits on m63)', () => {
+  // Bumrah's S2 6.1 is a legal "No Run" (a dot). Each case replaces that one ball and pins his whole line.
+  // Unedited: 20 legal, 12 conceded, 3 wickets, 12 dots, no wides, no no-balls, no maidens.
+  const line = (legalBalls: number, runsConceded: number, wickets: number, dots: number, wideDeliveries: number): BowlingStats => ({
+    legalBalls,
+    runsConceded,
+    wickets,
+    dots,
+    maidens: 0,
+    wideDeliveries,
+    noBallDeliveries: 0,
+  });
+  const cases: Array<[number, string, string, BowlingStats]> = [
+    [21, '1 Wide + stump Out', 'bowler wicket and a wide delivery, not a legal ball', line(19, 13, 4, 11, 1)],
+    [20, '1 Wide + Hit Wicket', 'bowler wicket and a wide delivery, not a legal ball', line(19, 13, 4, 11, 1)],
+    [87, 'Hit Wicket', 'bowler wicket on a legal ball, and a 0-run wicket is a dot', line(20, 12, 4, 12, 0)],
+    [65, 'Run Out + 1 Run', 'no bowler wicket; the completed run is charged and spoils the dot', line(20, 13, 3, 11, 0)],
+    [22, '1 Wide + Run Out', 'no bowler wicket; a wide delivery', line(19, 13, 3, 11, 1)],
+    [1, '1 Bye', 'legal ball, not a dot, the bye not charged to the bowler', line(20, 12, 3, 11, 0)],
+    // Controller ruling (review Minor 1): runs off a wide are wides, byes included -> 1 + 4 charged.
+    [18, '1 Wide + 4 Bye', 'a wide delivery; its bye runs are charged to the bowler', line(19, 17, 3, 11, 1)],
+  ];
+
+  it.each(cases)('score %i "%s": %s', (id, name, _what, expected) => {
+    const body = structuredClone(m63);
+    setScore(ballAt(body, 'S2', 284, 6.1), id, name);
+    expect(bowling(body, '284', 'regulation')).toEqual(expected);
+  });
+
+  it('a bowler with only wides and no-balls: 0 legal balls, extras counted, finite score with only the per-delivery penalties', () => {
+    const body = structuredClone(m63);
+    const template = ballAt(body, 'S2', 284, 18.2);
+    // Corbin Bosch (4337), an MI substitute with no other involvement, bowls four illegal deliveries.
+    const extras: Array<[number, string]> = [
+      [17, '1 Wide'],
+      [52, '5 Wides'],
+      [7, '1 No Ball'],
+      [13, '1 No Ball + Four'],
+    ];
+    extras.forEach(([id, name], i) => {
+      const b = structuredClone(template);
+      delete b.bowler;
+      Object.assign(b, { id: 99_000_000 + i, bowler_id: 4337, batsmanout_id: null, catchstump_id: null, runout_by_id: null });
+      setScore(b, id, name);
+      (body.data.balls as Obj[]).push(b);
+    });
+
+    expect(bowling(body, '4337', 'regulation')).toEqual({
+      legalBalls: 0,
+      runsConceded: 12, // 1 + 5 + 1 + (1 no-ball + 4)
+      wickets: 0,
+      dots: 0,
+      maidens: 0,
+      wideDeliveries: 2,
+      noBallDeliveries: 2,
+    });
+
+    const bosch = normalizeFixture(body, catalog).players.find((p) => p.playerId === '4337')!;
+    expect(bosch.flags.map((f) => f.code)).toEqual(['bowling_card_mismatch']); // balls, no card row
+    const result = scorePlayerMatch(bosch);
+    expect(Number.isFinite(result.totalHalfPoints)).toBe(true);
+    expect(result.components).toEqual([
+      { phase: 'regulation', code: 'bowl_wides', quantity: 2, halfPoints: -4 },
+      { phase: 'regulation', code: 'bowl_noballs', quantity: 2, halfPoints: -8 },
+    ]);
+    expect(result.components.map((c) => c.code)).not.toContain('bowl_economy');
+    expect(result.totalHalfPoints).toBe(-12);
   });
 });
 
