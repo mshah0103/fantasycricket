@@ -12,6 +12,7 @@
     "sm:pull-squads": "tsx --env-file-if-exists=../../.env src/cli/pull-squads.ts",
     "sm:record": "tsx --env-file-if-exists=../../.env src/cli/record.ts",
     "sm:build-history": "tsx --env-file-if-exists=../../.env src/cli/build-history.ts",
+    "sm:gates": "tsx --env-file-if-exists=../../.env src/cli/gates.ts",
     "sm:export-fixture": "tsx --env-file-if-exists=../../.env src/cli/export-fixture.ts"
   },
   "dependencies": {
