@@ -49,6 +49,8 @@ async function writeRecording(): Promise<void> {
   await writeFile(join(dir, 'timeline.jsonl'), lines.join('\n') + '\n');
 }
 
+const md6 = (md: string): string => md.split(/^## Gate 6\b/m)[1]!.split(/^## Gate 7\b/m)[0]!;
+
 describe('buildGateReport', () => {
   it('has a section per gate and lists the Super Over fixture under Gate 3', async () => {
     await writeRecording();
@@ -72,6 +74,21 @@ describe('buildGateReport', () => {
     const a = await buildGateReport({ historyDir, recordingsDir, archive });
     const b = await buildGateReport({ historyDir, recordingsDir, archive });
     expect(a).toBe(b);
+  });
+
+  it('Gate 6 adds the Cricsheet coverage rows when present and says which source each season comes from', async () => {
+    const without = md6(await buildGateReport({ historyDir, recordingsDir, archive }));
+    expect(without).not.toContain('Cricsheet');
+    const cs = (year: number) => ({
+      year, seasonId: `cs:${year}`, fixturesListed: 58, fixturesFetched: 58, withBatting: 58, withBallByBall: 58, superOverFixtures: 1,
+      flagsByCode: { runout_fielder_missing: 40, sub_fielder_unidentified: 1 },
+    });
+    await writeFile(join(historyDir, 'coverage-cricsheet.json'), JSON.stringify([cs(2008), cs(2009)]));
+    const g6 = md6(await buildGateReport({ historyDir, recordingsDir, archive }));
+    expect(g6).toContain('Cricsheet');
+    expect(g6).toContain('| 2008 | cs:2008 | 58 | 58 | 58 | 58 | 1 | runout_fielder_missing 40, sub_fielder_unidentified 1 |');
+    expect(g6).toContain('| 2009 | cs:2009 |');
+    expect(g6).toContain('Source per season: Sportmonks 2025; Cricsheet 2008–2009.');
   });
 
   it('renders Gates 5, 7 and 8 as Pending with no recordings and no squads', async () => {

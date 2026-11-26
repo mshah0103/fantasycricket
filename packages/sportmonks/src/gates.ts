@@ -226,9 +226,9 @@ function gate3(scan: Scan): string {
 // ---------------------------------------------------------------------------
 // Gates 4 and 6 (history)
 
-async function readCoverage(historyDir: string): Promise<SeasonCoverage[] | null> {
+async function readCoverage(historyDir: string, file = 'coverage.json'): Promise<SeasonCoverage[] | null> {
   try {
-    return JSON.parse(await readFile(join(historyDir, 'coverage.json'), 'utf8')) as SeasonCoverage[];
+    return JSON.parse(await readFile(join(historyDir, file), 'utf8')) as SeasonCoverage[];
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw e;
@@ -283,14 +283,47 @@ async function gate6(historyDir: string): Promise<string> {
   const coverage = await readCoverage(historyDir);
   if (!coverage) return 'Pending: no history output; run sm:build-history first.';
   const gaps = coverage.filter((c) => c.fixturesFetched === 0 || c.withBallByBall < c.fixturesFetched).map((c) => c.year);
-  return [
+  const lines = [
     table(
       ['Season', 'Season id', 'Listed', 'Fetched', 'With batting', 'With ball-by-ball', 'Super Over fixtures'],
       coverage.map((c) => [c.year, c.seasonId || '-', c.fixturesListed, c.fixturesFetched, c.withBatting, c.withBallByBall, c.superOverFixtures]),
     ),
     '',
     `Seasons with no fixtures or with fixtures lacking ball-by-ball: ${gaps.length ? gaps.join(', ') : 'none'}.`,
+  ];
+  // Task 12: the one-time Cricsheet import (spec §12.1) writes its own coverage next to Sportmonks'.
+  const cricsheet = await readCoverage(historyDir, 'coverage-cricsheet.json');
+  if (!cricsheet) return lines.join('\n');
+  const flagText = (c: SeasonCoverage): string => Object.entries(c.flagsByCode).map(([k, v]) => `${k} ${v}`).join(', ') || '-';
+  const smYears = coverage.filter((c) => c.fixturesFetched > 0).map((c) => c.year);
+  const csYears = cricsheet.filter((c) => c.fixturesFetched > 0 && !smYears.includes(c.year)).map((c) => c.year);
+  const allYears = [...new Set([...coverage, ...cricsheet].map((c) => c.year))];
+  const neither = allYears.filter((y) => !smYears.includes(y) && !csYears.includes(y));
+  return [
+    ...lines,
+    '',
+    'Cricsheet (one-time import for seasons Sportmonks lacks, spec §12.1; from `coverage-cricsheet.json`. Listed and Fetched both count the Cricsheet match files dated in that year):',
+    '',
+    table(
+      ['Season', 'Season id', 'Listed', 'Fetched', 'With batting', 'With ball-by-ball', 'Super Over fixtures', 'Flags'],
+      cricsheet.map((c) => [c.year, c.seasonId, c.fixturesListed, c.fixturesFetched, c.withBatting, c.withBallByBall, c.superOverFixtures, flagText(c)]),
+    ),
+    '',
+    `Source per season: Sportmonks ${yearRanges(smYears)}; Cricsheet ${yearRanges(csYears)}${neither.length ? `; neither ${yearRanges(neither)}` : ''}.`,
   ].join('\n');
+}
+
+/** `[2008, 2009, 2010, 2013]` -> `2008–2010, 2013`; empty -> `none`. */
+function yearRanges(years: number[]): string {
+  const ys = [...new Set(years)].sort((a, b) => a - b);
+  const out: string[] = [];
+  for (let i = 0; i < ys.length; ) {
+    let j = i;
+    while (j + 1 < ys.length && ys[j + 1] === ys[j]! + 1) j++;
+    out.push(j === i ? String(ys[i]) : `${ys[i]}–${ys[j]}`);
+    i = j + 1;
+  }
+  return out.join(', ') || 'none';
 }
 
 // ---------------------------------------------------------------------------
