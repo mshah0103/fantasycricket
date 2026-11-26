@@ -21,6 +21,10 @@ Field meanings are in [`../../FIELD_MAP.md`](../../FIELD_MAP.md).
 | `ipl2025-m44-kkr-pbks-noresult.json` | 65586 | 44th Match, KKR v PBKS, 2025-04-26 | Abandoned after play started: `status: "Aban."`, `draw_noresult: "no-result"`, `note: "No result"`. PBKS made 201/4 in 20 overs and KKR 7/0 in 1 over, then rain stopped play. The KKR innings has a bowling row with 0 overs for Arshdeep Singh (4880). |
 | `ipl2025-fielding-sample.json` | 65571 | 29th Match, DC v MI, 2025-04-13 | Every run-out shape in one fixture, in the 19th over of the DC chase: a two-fielder run-out (Ashutosh Sharma: `catch_stump_player_id` Will Jacks 3806, `runout_by_id` Ryan Rickelton 662), a **substitute** two-fielder run-out (Kuldeep Yadav: `Run Out (Sub)`, `catch_stump_player_id` Raj Angad Bawa 35051, who is a `substitution: true` lineup player, `runout_by_id` Rickelton 662), and a single-fielder run-out with `runout_by_id: null` (Mohit Sharma: `catch_stump_player_id` Mitchell Santner 227). It also has a caught-and-bowled (KL Rahul c & b Karn Sharma 2999, an impact substitute), a stumping off a wide (`1 Wide + stump Out`, Vipraj Nigam st Rickelton) and an impact substitute who batted (Karun Nair 2912, 89 runs). |
 
+`scores.json` is the `/scores` catalog: the latest successful archived body of `GET /scores`
+(`{ "data": [{ id, name, runs, … }] }`, 103 entries, fetched 2026-11-26T16:36Z), pretty-printed from the
+local archive on 2026-11-26. Tests turn it into the score-id → dismissal-name lookup with `buildScoreCatalog`.
+
 ## Why 65571 is the fielding sample
 
 In 2025 there are 39 run-outs and 13 substitute dismissals (12 `Catch Out (Sub)` and 1 `Run Out (Sub)`).
