@@ -121,4 +121,19 @@ describe('buildHistory', () => {
     expect(coverage[0]!.fixturesFetched).toBe(3);
     expect(readdirSync(out).sort()).toEqual(['coverage.json', 'ipl-2025.jsonl']);
   });
+
+  it('fromYear alone runs through the latest year with data; toYear alone starts at the earliest', async () => {
+    const archive = createFileArchive(tmp);
+    await seed(archive);
+    const a = await buildHistory(archive, out, { fromYear: 2023 });
+    expect(a.map((c) => [c.year, c.fixturesFetched])).toEqual([[2023, 0], [2024, 0], [2025, 3]]);
+    const b = await buildHistory(archive, out, { toYear: 2027 });
+    expect(b.map((c) => c.year)).toEqual([2025, 2026, 2027]);
+  });
+
+  it('an empty archive with a range yields no rows and does not throw', async () => {
+    const archive = createFileArchive(tmp);
+    await archive.save('/scores', {}, 200, load('scores.json'), new Date(Date.UTC(2026, 0, 1)));
+    expect(await buildHistory(archive, out, { fromYear: 2008 })).toEqual([]);
+  });
 });

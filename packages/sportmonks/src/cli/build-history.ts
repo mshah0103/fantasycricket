@@ -8,18 +8,24 @@ import { flag } from './args.js';
 const argv = process.argv.slice(2);
 const dataDir = resolve(findRepoRoot(), process.env.FC_DATA_DIR || 'data');
 const archive = createFileArchive(dataDir);
-const fromYear = flag(argv, 'from') ? Number(flag(argv, 'from')) : 2008;
-const toArg = flag(argv, 'to');
-
-// Default upper bound: the latest year that has archived data (first pass without a range).
-let failed = 0;
-const onFixtureError = (id: string, err: unknown) => {
-  failed++;
-  console.error(`fixture ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+const optYear = (name: string): number | undefined => {
+  const v = flag(argv, name);
+  if (v === undefined) return undefined;
+  if (!/^\d{4}$/.test(v)) throw new Error(`--${name} <year> must be a 4-digit year, got "${v}"`);
+  return Number(v);
 };
-const probe = toArg ? undefined : await buildHistory(archive, join(dataDir, 'history'), { onFixtureError });
-const toYear = toArg ? Number(toArg) : Math.max(...probe!.map((c) => c.year));
-const coverage = await buildHistory(archive, join(dataDir, 'history'), { fromYear, toYear, onFixtureError: () => {} });
+const fromYear = optYear('from') ?? 2008;
+const toYear = optYear('to'); // absent: through the latest year that has data
+
+let failed = 0;
+const coverage = await buildHistory(archive, join(dataDir, 'history'), {
+  fromYear,
+  toYear,
+  onFixtureError: (id, err) => {
+    failed++;
+    console.error(`fixture ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+  },
+});
 
 const cols = ['year', 'seasonId', 'listed', 'fetched', 'batting', 'ballByBall', 'superOver'] as const;
 console.log(cols.join('\t'));
